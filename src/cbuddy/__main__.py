@@ -66,18 +66,32 @@ def cmd_hook(args):
     cwd = os.getcwd()
     session_id = hook_data.get("session_id", "")
 
-    # Extract message content
-    message = hook_data.get("message", "")
-    if not message and args.hook_type == "stop":
-        # Stop hook: try to get last assistant message from transcript
-        transcript = hook_data.get("transcript", [])
-        if isinstance(transcript, list):
-            for entry in reversed(transcript):
-                if isinstance(entry, dict) and entry.get("role") == "assistant":
-                    message = entry.get("message", "")[:500]
-                    break
-        if not message:
-            message = hook_data.get("transcript_summary", "")[:500]
+    # Extract message: read last assistant message from transcript file
+    message = ""
+    transcript_path = hook_data.get("transcript_path", "")
+    if transcript_path:
+        try:
+            last_assistant = ""
+            with open(transcript_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = json.loads(line)
+                    if entry.get("type") == "assistant":
+                        msg = entry.get("message", {})
+                        if isinstance(msg, dict):
+                            texts = [
+                                b.get("text", "")
+                                for b in msg.get("content", [])
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            ]
+                            if texts:
+                                last_assistant = " ".join(texts)
+            if last_assistant:
+                message = last_assistant
+        except Exception:
+            pass
 
     matcher = os.environ.get("CLAUDE_NOTIFICATION_TYPE", "")
 
@@ -93,13 +107,13 @@ def cmd_hook(args):
 
     try:
         req = urllib.request.Request(
-            f"http://localhost:{port}/hook",
+            f"http://127.0.0.1:{port}/hook",
             data=payload,
             headers={"Content-Type": "application/json"},
         )
         urllib.request.urlopen(req, timeout=5)
-    except Exception:
-        pass  # server may be down
+    except Exception as e:
+        print(f"[cbuddy] hook failed: {e}", file=sys.stderr)
 
 
 def cmd_install_hooks(_args):

@@ -66,10 +66,7 @@ def _make_message(hook_type: str, matcher: str, cwd: str, message: str) -> str:
     label = _LABELS.get(matcher) or _LABELS.get(hook_type, hook_type)
     text = f"[{project}] {label}"
     if message:
-        content = message[:300]
-        if len(message) > 300:
-            content += "..."
-        text += f"\n> {content}"
+        text += f"\n> {message}"
     return text
 
 

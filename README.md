@@ -91,10 +91,41 @@ Terminal Tab 3 (session ghi)  <-->  飞书话题 C
 ## CLI
 
 ```bash
-cbuddy serve                              # 启动服务
+cbuddy serve                              # 启动服务（前台）
 cbuddy install-hooks                       # 安装 Claude Code Hooks
 cbuddy test-inject /dev/ttys003 "hello"    # 测试注入
 cbuddy test-inject /dev/ttys003 "y" --no-enter
+```
+
+### 后台运行
+
+`cbuddy serve` 需要保持运行。推荐用单独终端 tab 运行，或后台启动：
+
+```bash
+nohup cbuddy serve > /tmp/cbuddy.log 2>&1 &
+```
+
+如需开机自启，可创建 LaunchAgent：
+
+```bash
+cat > ~/Library/LaunchAgents/com.cbuddy.serve.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.cbuddy.serve</string>
+    <key>ProgramArguments</key>
+    <array><string>cbuddy</string><string>serve</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>/tmp/cbuddy.log</string>
+    <key>StandardErrorPath</key><string>/tmp/cbuddy.log</string>
+    <key>WorkingDirectory</key><string>/Users/YOU/path-to/cbuddy</string>
+</dict>
+</plist>
+EOF
+# 记得把 WorkingDirectory 改为你的 cbuddy 项目路径（.env 所在目录）
+launchctl load ~/Library/LaunchAgents/com.cbuddy.serve.plist
 ```
 
 ## Requirements
