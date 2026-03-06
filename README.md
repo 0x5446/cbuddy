@@ -1,17 +1,27 @@
 # Agent Hotline
 
+[**中文文档**](README_CN.md)
+
 **Let your AI agent call you when it needs help.**
 
-> Vibe coding anytime, anywhere — human-in-the-loop for Claude Code via Feishu.
+> Human-in-the-loop for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via [Feishu / Lark](https://www.feishu.cn/) — vibe coding anytime, anywhere.
 
-When running Claude Code agents or automation, sometimes Claude needs help — confirmation, missing context, permission to proceed. Normally this blocks the task.
-
-Agent Hotline solves this by sending you a Feishu notification. You reply with text or tap a button, and Claude continues — even when you're away from your computer.
+When Claude Code needs confirmation, context, or permission, it normally blocks and waits. Agent Hotline bridges that gap: it sends you a Feishu message, you reply from your phone, and Claude keeps going.
 
 ```
-Claude Code ──Hook──> Agent Hotline ──API──> Feishu (card + buttons)
-             <──inject──              <──WS── (button click / text reply)
+Claude Code ──Hook──> Agent Hotline ──API──> Feishu (thread + buttons)
+             <──inject──              <──WS── (tap / reply)
 ```
+
+## Features
+
+- **Threaded conversations** — Each Claude Code session maps to a Feishu thread, keeping context organized
+- **One-tap permissions** — Interactive cards with Allow / Deny / Always buttons for permission prompts
+- **Text replies** — Reply in any thread to type directly into the correct terminal tab
+- **Emoji receipts** — Random emoji reactions confirm delivery at a glance (no noisy text replies)
+- **Multi-session** — Run multiple Claude Code instances; replies route to the right terminal automatically
+- **Session persistence** — Survives server restarts; sessions resume with their Feishu threads intact
+- **Zero config in Claude** — Just `install-hooks` once, then use `claude` as normal
 
 ## Quick Start
 
@@ -19,14 +29,17 @@ Claude Code ──Hook──> Agent Hotline ──API──> Feishu (card + butt
 
 1. Go to [Feishu Open Platform](https://open.feishu.cn/app) and create an enterprise app
 2. **Add capability** > Bot
-3. **Permissions** > Enable `im:message` and `im:message:send_as_bot`
-4. **Events & Callbacks** > Use long connection > Add event `im.message.receive_v1` > Confirm permissions
+3. **Permissions** > Enable:
+   - `im:message` — Read messages
+   - `im:message:send_as_bot` — Send messages
+   - `im:message.reactions:write_only` — Add emoji reactions
+4. **Events & Callbacks** > Long connection mode > Add event `im.message.receive_v1`
 5. **Version Management** > Create version > Publish
 
 ### 2. Install
 
 ```bash
-# Install uv (skip if already installed)
+# Install uv if needed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 git clone https://github.com/0x5446/agent-hotline.git
@@ -35,20 +48,20 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` with your Feishu App ID / Secret / Verification Token. Default port is 3001 (customizable via `PORT` env var).
+Edit `.env` with your Feishu App ID, Secret, and Verification Token.
 
-### 3. Get your open_id
+### 3. Get Your open_id
 
-Start the service, then send any message to your bot in Feishu. The log will print your `open_id`:
+Start the service, then send any message to your bot in Feishu:
 
 ```bash
 uv run agent-hotline serve
-# Log output: Non-reply message from ou_xxxx (use this open_id for FEISHU_RECEIVE_ID)
+# Log: Non-reply message from ou_xxxx (use this open_id for FEISHU_RECEIVE_ID)
 ```
 
 Add `ou_xxxx` to `FEISHU_RECEIVE_ID` in `.env`, then restart.
 
-### 4. Install Claude Code Hooks & macOS Permission
+### 4. Install Claude Code Hooks
 
 ```bash
 uv run agent-hotline install-hooks
@@ -56,51 +69,50 @@ uv run agent-hotline install-hooks
 
 Restart your Claude Code session to activate.
 
-> **macOS Accessibility**: System Settings > Privacy & Security > Accessibility > Add Terminal.app. Without this, terminal injection will fail.
+> **macOS Accessibility**: System Settings > Privacy & Security > Accessibility > Add Terminal.app. Required for terminal injection.
 
----
-
-Done. Just use `claude` as normal. No tmux, no wrapper, no special setup.
+That's it. Use `claude` as normal — no tmux, no wrapper, no special setup.
 
 ## How It Works
 
-1. Claude Code [Hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) fire on task completion / input needed, `agent-hotline hook` POSTs the event to the local server
-2. Agent Hotline sends an **interactive card** via Feishu API (permission prompts have buttons), same session messages auto-thread
-3. You tap a button or reply with text, delivered in real-time via WebSocket
-4. Agent Hotline injects your response into the correct Terminal.app tab via AppleScript clipboard paste
+1. Claude Code [Hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) fire on task stop / permission prompt / input needed
+2. `agent-hotline hook` POSTs the event to the local server
+3. Agent Hotline creates a **Feishu thread** (project name as title, content as first reply)
+4. You tap a button or reply with text — delivered in real-time via Feishu WebSocket
+5. Your response is injected into the correct Terminal.app tab via AppleScript
 
 ## Usage
 
-| Feishu Card | Action | Effect |
-|-------------|--------|--------|
-| Permission prompt (red) | Tap button | Injects y/n/a |
-| Waiting for input (blue) | Reply with text | Types into terminal |
-| Task complete (green) | Reply with new instruction | Continues working |
+| Scenario | What You See | What You Do |
+|----------|-------------|-------------|
+| Permission prompt | Card with buttons | Tap **Allow** / **Deny** / **Always** |
+| Waiting for input | Text message in thread | Reply with text |
+| Task complete | Text message in thread | Reply to continue, or ignore |
 
-Delivery confirmation is shown after each action (success or failure).
+Delivery status is shown as an emoji reaction on your message — no extra noise in the thread.
 
 ## Multiple Sessions
 
-Each Claude Code session maps to a separate Feishu thread. Reply to any message in a thread to inject into the correct terminal:
+Each Claude Code session auto-threads in Feishu. Reply to any message in a thread to inject into the correct terminal:
 
 ```
-Terminal Tab 1 (session abc)  <-->  Feishu Thread A
-Terminal Tab 2 (session def)  <-->  Feishu Thread B
+Terminal Tab 1 (project-a)  <-->  Feishu Thread "project-a | refact..."
+Terminal Tab 2 (project-b)  <-->  Feishu Thread "project-b | add ne..."
 ```
 
-One `agent-hotline serve` handles all sessions.
+One `agent-hotline` instance handles all sessions.
 
 ## CLI
 
 ```bash
-agent-hotline start                          # Background (log: ~/.agent-hotline/agent-hotline.log)
+agent-hotline start                          # Start as daemon
 agent-hotline start --log /tmp/hotline.log   # Custom log path
-agent-hotline stop                           # Stop
-agent-hotline restart                        # Restart
-agent-hotline status                         # Check status
+agent-hotline stop                           # Stop daemon
+agent-hotline restart                        # Restart daemon
+agent-hotline status                         # Check if running
 agent-hotline serve                          # Foreground (debug)
 agent-hotline install-hooks                  # Install Claude Code hooks
-agent-hotline test-inject /dev/ttys003 "hi"  # Test injection
+agent-hotline test-inject /dev/ttys003 "hi"  # Test terminal injection
 ```
 
 Runtime files in `~/.agent-hotline/`:
@@ -114,13 +126,17 @@ Runtime files in `~/.agent-hotline/`:
 ## Requirements
 
 - macOS (AppleScript + Terminal.app)
-- [uv](https://docs.astral.sh/uv/) (Python 3.13 managed by uv)
+- [uv](https://docs.astral.sh/uv/) (Python >= 3.13)
 - Feishu enterprise app (free)
+
+## Contributing
+
+Issues and PRs are welcome. Please run `uv run pytest` before submitting.
 
 ## Disclaimer
 
 This project is not affiliated with Anthropic. Claude is a trademark of Anthropic.
 
-## [License](LICENSE)
+## License
 
-MIT
+[MIT](LICENSE)
