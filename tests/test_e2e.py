@@ -23,6 +23,7 @@ class _Base(unittest.TestCase):
         self._next_reply_id = 1
         self.sent = []       # [(msg_id, text_or_card)]
         self.replied = []    # [(parent_msg_id, text_or_card)]
+        self.reactions = []  # [(message_id, emoji_type)]
 
         server.session_store = SessionStore(self.state_path)
         server.session_store.load()
@@ -31,6 +32,7 @@ class _Base(unittest.TestCase):
         self._patches = [
             mock.patch("agent_hotline.server._send", side_effect=self._fake_send),
             mock.patch("agent_hotline.server._reply", side_effect=self._fake_reply),
+            mock.patch("agent_hotline.server._add_reaction", side_effect=self._fake_add_reaction),
             mock.patch("agent_hotline.server._tag_terminal"),
         ]
         for p in self._patches:
@@ -47,11 +49,14 @@ class _Base(unittest.TestCase):
         self.sent.append((msg_id, card or text))
         return msg_id
 
-    def _fake_reply(self, message_id, text="", card=None):
+    def _fake_reply(self, message_id, text="", card=None, reply_in_thread=False):
         reply_id = f"reply-{self._next_reply_id}"
         self._next_reply_id += 1
         self.replied.append((message_id, card or text))
         return reply_id
+
+    def _fake_add_reaction(self, message_id, emoji_type):
+        self.reactions.append((message_id, emoji_type))
 
     # -- helpers --
 
@@ -114,18 +119,22 @@ class HealthTests(_Base):
 # =========================================================================
 
 class HookNewSessionTests(_Base):
-    def test_new_session_sends_text_root_only(self):
+    def test_new_session_sends_title_and_replies_content(self):
         resp = self._post_hook()
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertTrue(body["ok"])
         self.assertEqual(body["msg_id"], "root-1")
 
-        # Non-interactive: text root only, no card reply
+        # Title as root, content as reply to create thread
         self.assertEqual(len(self.sent), 1)
-        self.assertEqual(len(self.replied), 0)
-        _, text = self.sent[0]
-        self.assertIsInstance(text, str)
+        self.assertEqual(len(self.replied), 1)
+        _, title = self.sent[0]
+        self.assertIsInstance(title, str)
+        self.assertNotIn("> ", title)  # Title only, no message content
+        parent_id, content = self.replied[0]
+        self.assertEqual(parent_id, "root-1")
+        self.assertEqual(content, "done")
 
         session = server.session_store.get("session-1")
         self.assertIsNotNone(session)
@@ -133,13 +142,14 @@ class HookNewSessionTests(_Base):
         self.assertEqual(session.root_msg_id, "root-1")
         self.assertEqual(session.tty_pid, 1234)
 
-    def test_new_session_text_root_contains_project_info(self):
-        self._post_hook(hook_type="stop", matcher="", cwd="/tmp/myproject")
-        # Non-interactive: only text root, no card
+    def test_new_session_title_contains_project_and_snippet(self):
+        self._post_hook(hook_type="stop", matcher="", cwd="/tmp/myproject", message="hello world")
         self.assertEqual(len(self.sent), 1)
-        self.assertEqual(len(self.replied), 0)
-        _, text = self.sent[0]
-        self.assertIn("myproject", text)
+        self.assertEqual(len(self.replied), 1)
+        _, title = self.sent[0]
+        self.assertIn("myproject", title)
+        self.assertIn("hello", title)
+        self.assertIn("...", title)
 
     def test_permission_prompt_sends_text_root_and_card_reply(self):
         self._post_hook(matcher="permission_prompt", hook_type="notification")
@@ -147,7 +157,7 @@ class HookNewSessionTests(_Base):
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(len(self.replied), 1)
         _, card = self.replied[0]
-        self.assertEqual(card["header"]["template"], "red")
+        self.assertNotIn("header", card)  # No decorative header
         action_elements = [e for e in card["elements"] if e["tag"] == "action"]
         self.assertEqual(len(action_elements), 1)
         buttons = action_elements[0]["actions"]
@@ -180,8 +190,8 @@ class HookExistingSessionTests(_Base):
     def test_second_hook_replies_text_to_thread_root(self):
         self._post_hook()
         self.assertEqual(len(self.sent), 1)
-        # First hook (non-interactive): text root only, no card
-        self.assertEqual(len(self.replied), 0)
+        # First hook: title root + content reply (thread creation)
+        self.assertEqual(len(self.replied), 1)
 
         resp = self._post_hook(message="second event")
         body = resp.json()
@@ -189,10 +199,10 @@ class HookExistingSessionTests(_Base):
         self.assertIn("thread", body)
         self.assertEqual(body["thread"], "root-1")
 
-        # sent once (first hook text root), replied once (second hook text reply)
+        # sent once (first hook title root), replied twice (first content + second text reply)
         self.assertEqual(len(self.sent), 1)
-        self.assertEqual(len(self.replied), 1)
-        parent_msg_id, content = self.replied[0]
+        self.assertEqual(len(self.replied), 2)
+        parent_msg_id, content = self.replied[1]
         self.assertEqual(parent_msg_id, "root-1")
         self.assertIsInstance(content, str)  # text, not card
 
@@ -213,7 +223,7 @@ class MessageReplyTests(_Base):
         # Clear tracking from hook
         self.replied.clear()
 
-    def test_reply_injects_text_and_confirms(self):
+    def test_reply_injects_text_and_reacts_success(self):
         self._setup_session()
         with mock.patch("agent_hotline.server.inspect_tty_owner", return_value=("ok", "/dev/ttys001")), \
              mock.patch("agent_hotline.server.validate_tty", return_value=None), \
@@ -223,9 +233,11 @@ class MessageReplyTests(_Base):
                 message_id="user-1", text="continue",
             ))
         inj.assert_called_once_with("/dev/ttys001", "continue")
-        self.assertEqual(self.replied[0], ("user-1", "✅ 已送达 /dev/ttys001"))
+        self.assertEqual(len(self.reactions), 1)
+        self.assertEqual(self.reactions[0][0], "user-1")
+        self.assertIn(self.reactions[0][1], server._SUCCESS_EMOJIS)
 
-    def test_reply_inject_exception_returns_error(self):
+    def test_reply_inject_exception_reacts_failure(self):
         self._setup_session()
         with mock.patch("agent_hotline.server.inspect_tty_owner", return_value=("ok", "/dev/ttys001")), \
              mock.patch("agent_hotline.server.validate_tty", return_value=None), \
@@ -234,7 +246,9 @@ class MessageReplyTests(_Base):
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="hello",
             ))
-        self.assertIn("❌", self.replied[0][1])
+        self.assertEqual(len(self.reactions), 1)
+        self.assertEqual(self.reactions[0][0], "user-1")
+        self.assertIn(self.reactions[0][1], server._FAILURE_EMOJIS)
 
     def test_reply_to_unknown_thread_returns_warning(self):
         server._on_message(self._msg_event(
@@ -270,7 +284,7 @@ class MessageReplyTests(_Base):
             ))
         self.assertEqual(len(self.replied), 0)
 
-    def test_reply_with_invalid_tty_returns_error(self):
+    def test_reply_with_invalid_tty_reacts_failure(self):
         self._setup_session()
         with mock.patch("agent_hotline.server.inspect_tty_owner", return_value=("ok", "/dev/ttys001")), \
              mock.patch("agent_hotline.server.validate_tty", return_value="TTY does not exist"):
@@ -278,7 +292,8 @@ class MessageReplyTests(_Base):
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="hello",
             ))
-        self.assertIn("❌", self.replied[0][1])
+        self.assertEqual(len(self.reactions), 1)
+        self.assertIn(self.reactions[0][1], server._FAILURE_EMOJIS)
 
     def test_reply_with_stale_session_returns_warning(self):
         self._setup_session()
@@ -300,6 +315,28 @@ class MessageReplyTests(_Base):
             ))
         inj.assert_called_once_with("/dev/ttys009", "go")
         self.assertEqual(server.session_store.get("session-1").tty, "/dev/ttys009")
+        self.assertEqual(len(self.reactions), 1)
+        self.assertIn(self.reactions[0][1], server._SUCCESS_EMOJIS)
+
+    def test_reply_strips_mention_before_inject(self):
+        self._setup_session()
+        with mock.patch("agent_hotline.server.inspect_tty_owner", return_value=("ok", "/dev/ttys001")), \
+             mock.patch("agent_hotline.server.validate_tty", return_value=None), \
+             mock.patch("agent_hotline.server.inject", return_value=True) as inj:
+            server._on_message(self._msg_event(
+                root_id="root-1", parent_id="root-1",
+                message_id="user-1", text="@_user_1 continue working",
+            ))
+        inj.assert_called_once_with("/dev/ttys001", "continue working")
+
+    def test_reply_mention_only_is_ignored(self):
+        self._setup_session()
+        with mock.patch("agent_hotline.server.inspect_tty_owner", return_value=("ok", "/dev/ttys001")):
+            server._on_message(self._msg_event(
+                root_id="root-1", parent_id="root-1",
+                message_id="user-1", text="@_user_1 ",
+            ))
+        self.assertEqual(len(self.reactions), 0)
 
 
 # =========================================================================

@@ -2,6 +2,8 @@
 
 import json
 import logging
+import random
+import re
 import threading
 from os.path import basename
 from pathlib import Path
@@ -10,12 +12,15 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
     PatchMessageRequest,
     PatchMessageRequestBody,
     P2ImMessageReceiveV1,
 )
+from lark_oapi.api.im.v1.model.emoji import Emoji
 from lark_oapi.event.callback.model.p2_card_action_trigger import (
     P2CardActionTrigger,
     P2CardActionTriggerResponse,
@@ -107,23 +112,21 @@ _PERMISSION_BUTTONS = [
     {"label": "🔓 始终允许 (a)", "cmd": "a", "type": "default"},
 ]
 
+_SUCCESS_EMOJIS = [
+    "THUMBSUP", "OK", "JIAYI", "MUSCLE", "DONE", "YEAH", "APPLAUSE",
+    "Fire", "LGTM", "CheckMark", "Hundred", "SMILE", "Get", "OnIt",
+    "HEART", "CLAP", "FISTBUMP", "HIGHFIVE",
+]
+_FAILURE_EMOJIS = [
+    "FACEPALM", "CRY", "SOB", "CrossMark", "FROWN", "Sigh",
+    "SKULL", "SWEAT", "WRONGED", "TERROR",
+]
 
-def _build_card(
-    hook_type: str,
-    matcher: str,
-    cwd: str,
-    message: str,
-    tty: str = "",
-    session_id: str = "",
-) -> dict:
-    """Build a Feishu interactive card JSON."""
-    project = basename(cwd) if cwd else "unknown"
-    label = _LABELS.get(matcher) or _LABELS.get(hook_type, hook_type)
-    tty_label = Path(tty).name if tty else "tty?"
-    session_label = session_id[:8] if session_id else "session?"
-    title = f"[{project} {tty_label} {session_label}] {label}"
-    color = _CARD_COLORS.get(matcher) or _CARD_COLORS.get(hook_type, "blue")
+_MENTION_RE = re.compile(r"@_user_\d+\s*")
 
+
+def _build_card(message: str, session_id: str = "") -> dict:
+    """Build a Feishu interactive card with content and permission buttons."""
     elements = []
     if message:
         elements.append({
@@ -131,9 +134,7 @@ def _build_card(
             "text": {"tag": "lark_md", "content": message},
         })
 
-    # Add buttons for permission prompts
-    effective_type = matcher or hook_type
-    if effective_type == "permission_prompt" and session_id:
+    if session_id:
         actions = []
         for btn in _PERMISSION_BUTTONS:
             actions.append({
@@ -146,10 +147,6 @@ def _build_card(
 
     return {
         "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": title},
-            "template": color,
-        },
         "elements": elements or [{"tag": "div", "text": {"tag": "plain_text", "content": " "}}],
     }
 
@@ -184,6 +181,15 @@ def _make_message(
     if message:
         text += f"\n> {message}"
     return text
+
+
+def _make_title(cwd: str, message: str = "") -> str:
+    project = basename(cwd) if cwd else "unknown"
+    if not message:
+        return project
+    snippet = message[:5].rstrip()
+    ellipsis = "..." if len(message) > 5 else ""
+    return f"{project} | {snippet}{ellipsis}"
 
 
 def _terminal_label(cwd: str, tty: str, session_id: str) -> str:
@@ -226,17 +232,19 @@ def _send(text: str = "", card: dict | None = None) -> str | None:
     return resp.data.message_id
 
 
-def _reply(message_id: str, text: str = "", card: dict | None = None) -> str | None:
+def _reply(message_id: str, text: str = "", card: dict | None = None, reply_in_thread: bool = False) -> str | None:
     if card:
         msg_type = "interactive"
         content = json.dumps(card)
     else:
         msg_type = "text"
         content = json.dumps({"text": text})
-    body = ReplyMessageRequestBody.builder() \
+    builder = ReplyMessageRequestBody.builder() \
         .msg_type(msg_type) \
-        .content(content) \
-        .build()
+        .content(content)
+    if reply_in_thread:
+        builder = builder.reply_in_thread(True)
+    body = builder.build()
     req = ReplyMessageRequest.builder() \
         .message_id(message_id) \
         .request_body(body) \
@@ -259,6 +267,18 @@ def _edit_message(message_id: str, text: str):
     resp = lark_client.im.v1.message.patch(req)
     if not resp.success():
         logger.error(f"Edit message failed: {resp.code} {resp.msg}")
+
+
+def _add_reaction(message_id: str, emoji_type: str):
+    emoji = Emoji.builder().emoji_type(emoji_type).build()
+    body = CreateMessageReactionRequestBody.builder().reaction_type(emoji).build()
+    req = CreateMessageReactionRequest.builder() \
+        .message_id(message_id) \
+        .request_body(body) \
+        .build()
+    resp = lark_client.im.v1.message_reaction.create(req)
+    if not resp.success():
+        logger.error(f"Add reaction failed: {resp.code} {resp.msg}")
 
 
 # --- Feishu WebSocket event handlers ---
@@ -363,12 +383,15 @@ def _on_message(data: P2ImMessageReceiveV1):
     except (json.JSONDecodeError, TypeError):
         return
 
+    # Strip @mention placeholders (e.g. @_user_1)
+    reply_text = _MENTION_RE.sub("", reply_text).strip()
+
     if not reply_text:
         return
 
     tty_error = validate_tty(session.tty)
     if tty_error:
-        _thread_reply(message_id, f"❌ {tty_error}")
+        _add_reaction(message_id, random.choice(_FAILURE_EMOJIS))
         return
 
     project = basename(session.cwd) if session.cwd else "?"
@@ -376,12 +399,10 @@ def _on_message(data: P2ImMessageReceiveV1):
     try:
         inject(session.tty, reply_text)
         logger.info(f"Injected '{reply_text}' -> {session.tty} ({project})")
-        final = f"✅ 已送达 {session.tty}"
+        _add_reaction(message_id, random.choice(_SUCCESS_EMOJIS))
     except Exception as e:
         logger.error(f"Inject failed: {e}")
-        final = f"❌ 注入失败: {e}"
-
-    _thread_reply(message_id, final)
+        _add_reaction(message_id, random.choice(_FAILURE_EMOJIS))
 
 
 # --- FastAPI routes ---
@@ -420,34 +441,35 @@ async def receive_hook(request: Request):
             tty_pid_started_at=tty_pid_started_at,
         )
         if needs_card:
-            card = _build_card(hook_type, matcher, cwd, message, tty=tty, session_id=session_id)
+            card = _build_card(message, session_id)
             msg_id = _reply(session.root_msg_id, card=card)
         else:
-            msg_id = _reply(session.root_msg_id, text=text)
+            msg_id = _reply(session.root_msg_id, text=message or effective_type)
         if msg_id:
             return {"ok": True, "msg_id": msg_id, "thread": session.root_msg_id}
     else:
-        # New session: text root as thread anchor
-        msg_id = _send(text=text)
-        if msg_id and session_id:
-            session_store.upsert(
-                session_id,
-                tty=tty,
-                cwd=cwd,
-                root_msg_id=msg_id,
-                tty_pid=tty_pid,
-                tty_pid_started_at=tty_pid_started_at,
-            )
-            # Only add card reply for interactive types (buttons)
+        # New session: send title as thread root, reply with content
+        title = _make_title(cwd, message)
+        root_id = _send(text=title)
+        if root_id:
+            if session_id:
+                session_store.upsert(
+                    session_id,
+                    tty=tty,
+                    cwd=cwd,
+                    root_msg_id=root_id,
+                    tty_pid=tty_pid,
+                    tty_pid_started_at=tty_pid_started_at,
+                )
+            # Reply with content to create thread (reply_in_thread=True)
             if needs_card:
-                card = _build_card(hook_type, matcher, cwd, message, tty=tty, session_id=session_id)
-                _reply(msg_id, card=card)
-            return {"ok": True, "msg_id": msg_id}
-        elif msg_id:
-            if needs_card:
-                card = _build_card(hook_type, matcher, cwd, message, tty=tty, session_id=session_id)
-                _reply(msg_id, card=card)
-            return {"ok": True, "msg_id": msg_id}
+                card = _build_card(message, session_id)
+                _reply(root_id, card=card, reply_in_thread=True)
+            elif message:
+                _reply(root_id, text=message, reply_in_thread=True)
+            else:
+                _reply(root_id, text=effective_type, reply_in_thread=True)
+            return {"ok": True, "msg_id": root_id}
 
     return {"ok": False, "error": "send failed"}
 

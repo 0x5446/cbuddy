@@ -65,6 +65,28 @@ class ServerReplySessionTests(unittest.TestCase):
         self.assertIn("[plaudclaw ttys001 9079ba57] ✅ 任务完成", text)
         self.assertIn("> done", text)
 
+    def test_make_title_project_with_snippet(self):
+        title = server._make_title("/tmp/myproject", "hello world")
+        self.assertEqual(title, "myproject | hello...")
+
+    def test_make_title_short_message_no_ellipsis(self):
+        title = server._make_title("/tmp/myproject", "done")
+        self.assertEqual(title, "myproject | done")
+
+    def test_make_title_no_message(self):
+        title = server._make_title("/tmp/myproject")
+        self.assertEqual(title, "myproject")
+
+    def test_mention_regex_strips_at_user(self):
+        text = "@_user_1 continue working"
+        result = server._MENTION_RE.sub("", text).strip()
+        self.assertEqual(result, "continue working")
+
+    def test_mention_regex_strips_multiple(self):
+        text = "@_user_1 @_user_2 hello"
+        result = server._MENTION_RE.sub("", text).strip()
+        self.assertEqual(result, "hello")
+
     def test_terminal_label_matches_notification_hint(self):
         label = server._terminal_label(
             "/tmp/plaudclaw",
@@ -89,6 +111,7 @@ class ServerReplySessionTests(unittest.TestCase):
         with (
             mock.patch("agent_hotline.server._tag_terminal") as tag_terminal,
             mock.patch("agent_hotline.server._send", return_value="msg-1"),
+            mock.patch("agent_hotline.server._reply"),
         ):
             response = asyncio.run(server.receive_hook(FakeRequest()))
 
