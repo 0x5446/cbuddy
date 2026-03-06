@@ -124,10 +124,11 @@ def _escape_for_applescript(text: str) -> str:
 def inject(tty_path: str, text: str, enter: bool | None = None) -> bool:
     """Inject text into a terminal via clipboard paste + Cmd-V.
 
-    Returns True if the terminal content changed after injection (verified),
-    False if injection was attempted but could not be verified.
+    Returns True on success. Raises RuntimeError if the TTY is invalid or
+    tab not found.
 
-    Raises RuntimeError if the TTY is invalid or tab not found.
+    Note: content verification via `contents of t` is not possible because
+    Claude Code runs in an alternate screen buffer that AppleScript cannot read.
     """
     error = validate_tty(tty_path)
     if error:
@@ -143,7 +144,6 @@ def inject(tty_path: str, text: str, enter: bool | None = None) -> bool:
 
     # Clipboard paste (Cmd+V) is more reliable than keystroke which sends
     # char-by-char UI events that can be lost during window focus transitions.
-    # After injection, compare terminal contents to verify delivery.
     script = f'''
 tell application "Terminal"
     activate
@@ -153,9 +153,6 @@ tell application "Terminal"
                 set index of w to 1
                 set selected tab of w to t
                 delay 0.5
-
-                -- snapshot before injection
-                set contentBefore to contents of t
 
                 tell application "System Events"
                     set prevClip to ""
@@ -174,14 +171,7 @@ tell application "Terminal"
                     end try
                 end tell
 
-                -- verify: wait then check if content changed
-                delay 0.8
-                set contentAfter to contents of t
-                if contentAfter is not equal to contentBefore then
-                    return "verified"
-                else
-                    return "unverified"
-                end if
+                return "ok"
             end if
         end repeat
     end repeat
@@ -199,4 +189,4 @@ end tell
         raise RuntimeError(
             f"No Terminal.app tab found with TTY {tty_path}"
         )
-    return output == "verified"
+    return True

@@ -114,12 +114,21 @@ class HealthTests(_Base):
 # =========================================================================
 
 class HookNewSessionTests(_Base):
-    def test_new_session_sends_message_and_stores_session(self):
+    def test_new_session_sends_text_root_and_card_reply(self):
         resp = self._post_hook()
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertTrue(body["ok"])
         self.assertEqual(body["msg_id"], "root-1")
+
+        # Text root sent, card replied to root
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.replied), 1)
+        _, text = self.sent[0]
+        self.assertIsInstance(text, str)
+        parent_id, card = self.replied[0]
+        self.assertEqual(parent_id, "root-1")
+        self.assertIsInstance(card, dict)
 
         session = server.session_store.get("session-1")
         self.assertIsNotNone(session)
@@ -129,13 +138,14 @@ class HookNewSessionTests(_Base):
 
     def test_new_session_card_has_correct_title_and_color(self):
         self._post_hook(hook_type="stop", matcher="", cwd="/tmp/myproject")
-        _, card = self.sent[0]
+        # Card is in the reply (first reply to text root)
+        _, card = self.replied[0]
         self.assertIn("myproject", card["header"]["title"]["content"])
         self.assertEqual(card["header"]["template"], "green")
 
     def test_permission_prompt_card_has_buttons(self):
         self._post_hook(matcher="permission_prompt", hook_type="notification")
-        _, card = self.sent[0]
+        _, card = self.replied[0]
         self.assertEqual(card["header"]["template"], "red")
         action_elements = [e for e in card["elements"] if e["tag"] == "action"]
         self.assertEqual(len(action_elements), 1)
@@ -169,6 +179,8 @@ class HookExistingSessionTests(_Base):
     def test_second_hook_replies_to_thread_root(self):
         self._post_hook()
         self.assertEqual(len(self.sent), 1)
+        # First hook: text root (sent) + card reply
+        self.assertEqual(len(self.replied), 1)
 
         resp = self._post_hook(message="second event")
         body = resp.json()
@@ -176,10 +188,10 @@ class HookExistingSessionTests(_Base):
         self.assertIn("thread", body)
         self.assertEqual(body["thread"], "root-1")
 
-        # sent only once (first hook), replied once (second hook)
+        # sent once (first hook text root), replied twice (first hook card + second hook card)
         self.assertEqual(len(self.sent), 1)
-        self.assertEqual(len(self.replied), 1)
-        parent_msg_id, _ = self.replied[0]
+        self.assertEqual(len(self.replied), 2)
+        parent_msg_id, _ = self.replied[1]
         self.assertEqual(parent_msg_id, "root-1")
 
     def test_second_hook_updates_tty(self):
@@ -210,17 +222,6 @@ class MessageReplyTests(_Base):
             ))
         inj.assert_called_once_with("/dev/ttys001", "continue")
         self.assertEqual(self.replied[0], ("user-1", "✅ 已送达 /dev/ttys001"))
-
-    def test_reply_unverified_inject_warns(self):
-        self._setup_session()
-        with mock.patch("cbuddy.server.inspect_tty_owner", return_value=("ok", "/dev/ttys001")), \
-             mock.patch("cbuddy.server.validate_tty", return_value=None), \
-             mock.patch("cbuddy.server.inject", return_value=False):
-            server._on_message(self._msg_event(
-                root_id="root-1", parent_id="root-1",
-                message_id="user-1", text="y",
-            ))
-        self.assertIn("⚠️", self.replied[0][1])
 
     def test_reply_inject_exception_returns_error(self):
         self._setup_session()
@@ -316,15 +317,8 @@ class CardActionTests(_Base):
         inj.assert_called_once_with("/dev/ttys001", "y")
         self.assertEqual(resp.toast.type, "success")
         self.assertIn("已送达", resp.toast.content)
+        self.assertEqual(resp.card.data["header"]["template"], "green")
         self.assertEqual(resp.card.data["header"]["title"]["content"], "🔐 权限确认 → y")
-
-    def test_card_action_unverified_returns_warning(self):
-        self._setup_session()
-        with mock.patch("cbuddy.server.inspect_tty_owner", return_value=("ok", "/dev/ttys001")), \
-             mock.patch("cbuddy.server.validate_tty", return_value=None), \
-             mock.patch("cbuddy.server.inject", return_value=False):
-            resp = server._on_card_action(self._card_event(cmd="n", sid="session-1"))
-        self.assertEqual(resp.toast.type, "warning")
 
     def test_card_action_inject_failure_returns_error(self):
         self._setup_session()

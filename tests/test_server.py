@@ -89,6 +89,7 @@ class ServerReplySessionTests(unittest.TestCase):
         with (
             mock.patch("cbuddy.server._tag_terminal") as tag_terminal,
             mock.patch("cbuddy.server._send", return_value="msg-1"),
+            mock.patch("cbuddy.server._reply", return_value="reply-1"),
         ):
             response = asyncio.run(server.receive_hook(FakeRequest()))
 

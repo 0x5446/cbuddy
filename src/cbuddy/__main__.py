@@ -193,7 +193,7 @@ def cmd_install_hooks(_args):
         "Stop": [{"matcher": "", "hooks": [
             {"type": "command", "command": hook_cmd("stop", "Hero")}
         ]}],
-        "Notification": [{"matcher": "", "hooks": [
+        "Notification": [{"matcher": "permission_prompt|idle_prompt|elicitation_dialog", "hooks": [
             {"type": "command", "command": hook_cmd("notification", "Ping")}
         ]}],
     }

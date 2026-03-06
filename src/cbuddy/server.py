@@ -91,12 +91,14 @@ _LABELS = {
     "stop": "✅ 任务完成",
     "permission_prompt": "🔐 需要权限确认",
     "idle_prompt": "⏳ 等待你的输入",
+    "elicitation_dialog": "📋 请选择",
 }
 
 _CARD_COLORS = {
     "stop": "green",
     "permission_prompt": "red",
     "idle_prompt": "blue",
+    "elicitation_dialog": "blue",
 }
 
 _PERMISSION_BUTTONS = [
@@ -295,25 +297,19 @@ def _on_card_action(data: P2CardActionTrigger) -> P2CardActionTriggerResponse:
         resp.toast = toast
         return resp
 
-    verified = False
     try:
-        verified = inject(session.tty, cmd)
+        inject(session.tty, cmd)
         project = basename(session.cwd) if session.cwd else "?"
-        logger.info(f"Card action '{cmd}' -> {session.tty} ({project}) verified={verified}")
-
-        if verified:
-            status = f"✅ 已送达 {session.tty}"
-            toast_type = "success"
-        else:
-            status = f"⚠️ 已发送但未确认送达 {session.tty}"
-            toast_type = "warning"
+        logger.info(f"Card action '{cmd}' -> {session.tty} ({project})")
+        status = f"✅ 已送达 {session.tty}"
+        toast_type = "success"
+        color = "green"
     except Exception as e:
         logger.error(f"Card action inject failed: {e}")
         status = f"❌ 注入失败: {e}"
         toast_type = "error"
+        color = "orange"
 
-    # Return updated card (buttons removed) + toast.
-    # card.data must be a dict — JSON.marshal serializes it; json.dumps() would double-encode.
     resp = P2CardActionTriggerResponse()
     toast = CallBackToast()
     toast.type = toast_type
@@ -324,7 +320,7 @@ def _on_card_action(data: P2CardActionTrigger) -> P2CardActionTriggerResponse:
     card.type = "raw"
     card.data = _build_result_card(
         title=f"🔐 权限确认 → {cmd}",
-        color="green" if verified else "orange",
+        color=color,
         status_text=status,
     )
     resp.card = card
@@ -378,12 +374,9 @@ def _on_message(data: P2ImMessageReceiveV1):
     project = basename(session.cwd) if session.cwd else "?"
 
     try:
-        verified = inject(session.tty, reply_text)
-        logger.info(f"Injected '{reply_text}' -> {session.tty} ({project}) verified={verified}")
-        if verified:
-            final = f"✅ 已送达 {session.tty}"
-        else:
-            final = f"⚠️ 已发送但未确认送达 {session.tty}"
+        inject(session.tty, reply_text)
+        logger.info(f"Injected '{reply_text}' -> {session.tty} ({project})")
+        final = f"✅ 已送达 {session.tty}"
     except Exception as e:
         logger.error(f"Inject failed: {e}")
         final = f"❌ 注入失败: {e}"
@@ -429,8 +422,8 @@ async def receive_hook(request: Request):
         if msg_id:
             return {"ok": True, "msg_id": msg_id, "thread": session.root_msg_id}
     else:
-        # New session: send standalone message (becomes thread root)
-        msg_id = _send(card=card)
+        # New session: text root (visible in chat list) + card as first reply
+        msg_id = _send(text=text)
         if msg_id and session_id:
             session_store.upsert(
                 session_id,
@@ -440,8 +433,10 @@ async def receive_hook(request: Request):
                 tty_pid=tty_pid,
                 tty_pid_started_at=tty_pid_started_at,
             )
+            _reply(msg_id, card=card)
             return {"ok": True, "msg_id": msg_id}
         elif msg_id:
+            _reply(msg_id, card=card)
             return {"ok": True, "msg_id": msg_id}
 
     return {"ok": False, "error": "send failed"}
