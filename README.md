@@ -87,11 +87,15 @@ curl -fsSL https://raw.githubusercontent.com/0x5446/walkcode/main/install.sh | b
 
 This installs tmux/uv if missing, clones the repo, runs `uv sync`, creates `.env`, adds a shell wrapper, configures tmux scrollback, and installs Claude Code hooks. [Review the script](install.sh) before running if you prefer.
 
-After installation, reload your shell config:
+Open a new terminal window, or run `exec $SHELL` to reload your current session.
+
+### Upgrade
 
 ```bash
-source ~/.zshrc  # or source ~/.bashrc for bash users
+walkcode upgrade
 ```
+
+Pulls the latest code, reinstalls the CLI, and restarts the daemon. No need to reload your shell.
 
 ### Uninstall
 

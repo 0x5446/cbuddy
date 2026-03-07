@@ -91,11 +91,15 @@ curl -fsSL https://raw.githubusercontent.com/0x5446/walkcode/main/install.sh | b
 
 自动完成：安装 tmux/uv → 克隆仓库 → `uv sync` → 创建 `.env` → 注入 Shell Wrapper → 配置 tmux 滚动历史 → 安装 Hooks。运行前可先[查看脚本内容](install.sh)。
 
-安装完成后，重新加载 Shell 配置：
+打开一个新的终端窗口，或运行 `exec $SHELL` 重新加载当前 Shell 会话。
+
+### 升级
 
 ```bash
-source ~/.zshrc  # bash 用户用 source ~/.bashrc
+walkcode upgrade
 ```
+
+自动拉取最新代码、重装 CLI 并重启守护进程。无需重新加载 Shell。
 
 ### 一键卸载
 
