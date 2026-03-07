@@ -212,6 +212,40 @@ def cmd_install_hooks(_args):
     print("Restart Claude Code sessions to activate.")
 
 
+def cmd_upgrade(_args):
+    """Pull latest code, reinstall CLI, restart daemon."""
+    install_dir = _RUNTIME_DIR
+    if not (install_dir / ".git").exists():
+        # Try common install location
+        install_dir = Path.home() / ".walkcode"
+    if not (install_dir / ".git").exists():
+        print(f"Error: git repo not found in {install_dir}")
+        print("If WalkCode is installed elsewhere, cd into that directory and run:")
+        print("  git pull && uv sync && uv tool install -e . --force && walkcode restart")
+        sys.exit(1)
+
+    def run(cmd, **kwargs):
+        print(f"  → {cmd}")
+        result = subprocess.run(cmd, shell=True, cwd=str(install_dir), **kwargs)
+        if result.returncode != 0:
+            print(f"  ✗ failed (exit {result.returncode})")
+            sys.exit(1)
+
+    print(f"Upgrading WalkCode in {install_dir}...")
+    run("git pull --ff-only")
+    run("uv sync")
+    run("uv tool install -e . --force")
+
+    pid = _read_pid()
+    if pid:
+        print("Restarting daemon...")
+        run("walkcode restart")
+    else:
+        print("Daemon not running, skipping restart.")
+
+    print("Upgrade complete.")
+
+
 def cmd_test_inject(args):
     from .tty import inject, validate_target
 
@@ -245,6 +279,7 @@ def main():
     hp.add_argument("hook_type", choices=["stop", "notification"], help="Hook event type")
 
     sub.add_parser("install-hooks", help="Install Claude Code hooks")
+    sub.add_parser("upgrade", help="Pull latest code, reinstall CLI, restart daemon")
 
     p = sub.add_parser("test-inject", help="Test tmux injection")
     p.add_argument("session", help="tmux session name")
@@ -260,6 +295,7 @@ def main():
         "status": cmd_status,
         "hook": cmd_hook,
         "install-hooks": cmd_install_hooks,
+        "upgrade": cmd_upgrade,
         "test-inject": cmd_test_inject,
     }
     fn = cmds.get(args.command)

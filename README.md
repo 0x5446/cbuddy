@@ -241,6 +241,7 @@ walkcode restart                          # Restart daemon
 walkcode status                           # Check if running
 walkcode serve                            # Foreground (debug)
 walkcode install-hooks                    # Install hooks
+walkcode upgrade                          # Pull + reinstall + restart
 walkcode test-inject <tmux-session> "hi"  # Test injection
 ```
 

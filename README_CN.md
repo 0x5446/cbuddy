@@ -245,6 +245,7 @@ walkcode restart                          # 重启
 walkcode status                           # 查看运行状态
 walkcode serve                            # 前台运行（调试用）
 walkcode install-hooks                    # 安装 Hooks
+walkcode upgrade                          # 拉取最新代码 + 重装 CLI + 重启
 walkcode test-inject <tmux-session> "hi"  # 测试注入
 ```
 
