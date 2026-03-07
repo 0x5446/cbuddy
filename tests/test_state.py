@@ -4,7 +4,7 @@ import time
 import unittest
 from pathlib import Path
 
-from agent_hotline.state import SessionStore
+from walkcode.state import SessionStore
 
 
 class SessionStoreTests(unittest.TestCase):

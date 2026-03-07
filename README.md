@@ -1,4 +1,4 @@
-# Agent Hotline
+# WalkCode
 
 [**中文文档**](README_CN.md)
 
@@ -6,11 +6,11 @@
 
 > Human-in-the-loop for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via [Feishu / Lark](https://www.feishu.cn/) — vibe coding anytime, anywhere.
 
-When Claude Code needs confirmation, context, or permission, it normally blocks and waits. Agent Hotline bridges that gap: it sends you a Feishu message, you reply from your phone, and Claude keeps going — even when your screen is locked.
+When Claude Code needs confirmation, context, or permission, it normally blocks and waits. WalkCode bridges that gap: it sends you a Feishu message, you reply from your phone, and Claude keeps going — even when your screen is locked.
 
 ```
-Claude Code (tmux) ──Hook──> Agent Hotline ──API──> Feishu (thread + buttons)
-                    <──tmux send-keys──      <──WS── (tap / reply)
+Claude Code (tmux) ──Hook──> WalkCode ──API──> Feishu (thread + buttons)
+                    <──tmux send-keys──  <──WS── (tap / reply)
 ```
 
 ## Features
@@ -19,6 +19,7 @@ Claude Code (tmux) ──Hook──> Agent Hotline ──API──> Feishu (thre
 - **Threaded conversations** — Each Claude Code session maps to a Feishu thread, keeping context organized
 - **One-tap permissions** — Interactive cards with Allow / Deny / Always buttons for permission prompts
 - **Text replies** — Reply in any thread to type directly into the correct terminal
+- **Remote start** — Send a message in your Feishu chat to start a new Claude Code instance remotely
 - **Emoji receipts** — Random emoji reactions confirm delivery at a glance
 - **Multi-session** — Run multiple Claude Code instances; replies route to the right terminal automatically
 - **Session persistence** — Survives server restarts; sessions resume with their Feishu threads intact
@@ -59,11 +60,10 @@ Edit `.env` with your Feishu App ID, Secret, and Verification Token.
 Start the service, then send any message to your bot in Feishu:
 
 ```bash
-uv run agent-hotline serve
-# Log: Non-reply message from ou_xxxx (use this open_id for FEISHU_RECEIVE_ID)
+uv run walkcode serve
 ```
 
-Add `ou_xxxx` to `FEISHU_RECEIVE_ID` in `.env`, then restart.
+Check the logs for your `open_id`, add it to `FEISHU_RECEIVE_ID` in `.env`, then restart.
 
 ### 4. Add Shell Wrapper
 
@@ -87,7 +87,7 @@ This transparently wraps Claude Code in a tmux session. You still just type `cla
 ### 5. Install Claude Code Hooks
 
 ```bash
-uv run agent-hotline install-hooks
+uv run walkcode install-hooks
 ```
 
 Restart your Claude Code session to activate.
@@ -98,10 +98,18 @@ That's it. Type `claude`, and you'll get Feishu notifications that work even whe
 
 1. The shell wrapper starts Claude Code inside a tmux session
 2. Claude Code [Hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) fire on task stop / permission prompt / input needed
-3. `agent-hotline hook` detects the tmux session name and POSTs it to the local server
-4. Agent Hotline creates a **Feishu thread** (project name as title, content as first reply)
+3. `walkcode hook` detects the tmux session name and POSTs it to the local server
+4. WalkCode creates a **Feishu thread** (project name as title, content as first reply)
 5. You tap a button or reply with text — delivered in real-time via Feishu WebSocket
 6. `tmux send-keys` injects your response into the correct session — no GUI required
+
+### Remote Start
+
+You can also start a Claude Code instance directly from Feishu by sending a non-reply message to the bot. WalkCode will:
+
+1. Create a new tmux session with `claude "<your message>"`
+2. Reply in a thread confirming the session started
+3. When Claude's hooks fire, they automatically link to the same Feishu thread
 
 ## Usage
 
@@ -110,6 +118,7 @@ That's it. Type `claude`, and you'll get Feishu notifications that work even whe
 | Permission prompt | Card with buttons | Tap **Allow** / **Deny** / **Always** |
 | Waiting for input | Text message in thread | Reply with text |
 | Task complete | Text message in thread | Reply to continue, or ignore |
+| Start remotely | Send a message | Claude Code starts in a new tmux session |
 
 Delivery status is shown as an emoji reaction on your message.
 
@@ -122,28 +131,42 @@ tmux: claude-project-a-12345  <-->  Feishu Thread "project-a | refact..."
 tmux: claude-project-b-67890  <-->  Feishu Thread "project-b | add ne..."
 ```
 
-One `agent-hotline` instance handles all sessions.
+One `walkcode` instance handles all sessions.
 
 ## CLI
 
 ```bash
-agent-hotline start                            # Start as daemon
-agent-hotline start --log /tmp/hotline.log     # Custom log path
-agent-hotline stop                             # Stop daemon
-agent-hotline restart                          # Restart daemon
-agent-hotline status                           # Check if running
-agent-hotline serve                            # Foreground (debug)
-agent-hotline install-hooks                    # Install Claude Code hooks
-agent-hotline test-inject <tmux-session> "hi"  # Test tmux injection
+walkcode start                            # Start as daemon
+walkcode start --log /tmp/walkcode.log    # Custom log path
+walkcode stop                             # Stop daemon
+walkcode restart                          # Restart daemon
+walkcode status                           # Check if running
+walkcode serve                            # Foreground (debug)
+walkcode install-hooks                    # Install Claude Code hooks
+walkcode test-inject <tmux-session> "hi"  # Test tmux injection
 ```
 
-Runtime files in `~/.agent-hotline/`:
+Runtime files in `~/.walkcode/`:
 
 | File | Purpose |
 |------|---------|
-| `agent-hotline.pid` | Daemon PID |
-| `agent-hotline.log` | Service log |
+| `walkcode.pid` | Daemon PID |
+| `walkcode.log` | Service log |
 | `state.json` | Session persistence |
+
+## Configuration
+
+Environment variables (set in `.env`):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FEISHU_APP_ID` | Yes | Feishu app ID |
+| `FEISHU_APP_SECRET` | Yes | Feishu app secret |
+| `FEISHU_RECEIVE_ID` | Yes | Your open_id or chat_id |
+| `FEISHU_VERIFICATION_TOKEN` | Yes | Feishu verification token |
+| `FEISHU_RECEIVE_ID_TYPE` | No | `open_id` (default) or `chat_id` |
+| `WALKCODE_STATE_PATH` | No | Custom state file path |
+| `WALKCODE_CWD` | No | Default cwd for remote-started sessions |
 
 ## Requirements
 

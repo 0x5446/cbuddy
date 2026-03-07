@@ -11,7 +11,8 @@ class Config:
     feishu_receive_id_type: str  # "open_id" or "chat_id"
     feishu_verification_token: str
     port: int = 3001
-    state_path: Path = Path.home() / ".agent-hotline" / "state.json"
+    state_path: Path = Path.home() / ".walkcode" / "state.json"
+    default_cwd: str = str(Path.home())
 
     @classmethod
     def load(cls) -> "Config":
@@ -42,8 +43,9 @@ class Config:
             port=int(os.environ.get("PORT", "3001")),
             state_path=Path(
                 os.environ.get(
-                    "AGENT_HOTLINE_STATE_PATH",
-                    str(Path.home() / ".agent-hotline" / "state.json"),
+                    "WALKCODE_STATE_PATH",
+                    str(Path.home() / ".walkcode" / "state.json"),
                 )
             ).expanduser(),
+            default_cwd=os.environ.get("WALKCODE_CWD", str(Path.home())),
         )

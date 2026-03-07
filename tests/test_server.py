@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_hotline import server
-from agent_hotline.state import SessionStore
+from walkcode import server
+from walkcode.state import SessionStore
 
 
 class ServerReplySessionTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class ServerReplySessionTests(unittest.TestCase):
             root_msg_id="root-1",
         )
 
-        with mock.patch("agent_hotline.server.validate_target", return_value=None):
+        with mock.patch("walkcode.server.validate_target", return_value=None):
             session, error = server._load_reply_session("session-1")
 
         self.assertIsNone(error)
@@ -41,7 +41,7 @@ class ServerReplySessionTests(unittest.TestCase):
             root_msg_id="root-1",
         )
 
-        with mock.patch("agent_hotline.server.validate_target", return_value="session not found"):
+        with mock.patch("walkcode.server.validate_target", return_value="session not found"):
             session, error = server._load_reply_session("session-1")
 
         self.assertIsNone(session)
@@ -82,8 +82,8 @@ class ServerReplySessionTests(unittest.TestCase):
                 }
 
         with (
-            mock.patch("agent_hotline.server._send", return_value="msg-1"),
-            mock.patch("agent_hotline.server._reply"),
+            mock.patch("walkcode.server._send", return_value="msg-1"),
+            mock.patch("walkcode.server._reply"),
         ):
             response = asyncio.run(server.receive_hook(FakeRequest()))
 

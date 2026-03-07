@@ -1,4 +1,4 @@
-"""Agent Hotline CLI."""
+"""WalkCode CLI."""
 
 import argparse
 import json
@@ -12,9 +12,9 @@ from pathlib import Path
 
 from .tty import detect_tmux_session
 
-_RUNTIME_DIR = Path.home() / ".agent-hotline"
-_PID_FILE = _RUNTIME_DIR / "agent-hotline.pid"
-_DEFAULT_LOG = _RUNTIME_DIR / "agent-hotline.log"
+_RUNTIME_DIR = Path.home() / ".walkcode"
+_PID_FILE = _RUNTIME_DIR / "walkcode.pid"
+_DEFAULT_LOG = _RUNTIME_DIR / "walkcode.log"
 
 
 def cmd_serve(_args):
@@ -30,7 +30,7 @@ def cmd_serve(_args):
         datefmt="%H:%M:%S",
     )
     start_ws_client(cfg)
-    print(f"Agent Hotline serving on http://localhost:{cfg.port}")
+    print(f"WalkCode serving on http://localhost:{cfg.port}")
     print(f"  Feishu {cfg.feishu_receive_id_type}: {cfg.feishu_receive_id}")
     print(f"  Hook: POST http://localhost:{cfg.port}/hook")
     uvicorn.run(app, host="127.0.0.1", port=cfg.port, log_level="warning")
@@ -65,14 +65,14 @@ def _wait_exit(pid: int, timeout: float = 5.0) -> bool:
 def cmd_start(args):
     pid = _read_pid()
     if pid:
-        print(f"Agent Hotline already running (pid {pid})")
+        print(f"WalkCode already running (pid {pid})")
         sys.exit(1)
 
     log_path = Path(args.log) if args.log != "-" else None
     _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
     # Build command: use the same Python + module to run serve
-    cmd = [sys.executable, "-m", "agent_hotline", "serve"]
+    cmd = [sys.executable, "-m", "walkcode", "serve"]
 
     if log_path:
         log_file = open(log_path, "a")
@@ -90,7 +90,7 @@ def cmd_start(args):
     )
 
     _PID_FILE.write_text(str(proc.pid))
-    msg = f"Agent Hotline started (pid {proc.pid})"
+    msg = f"WalkCode started (pid {proc.pid})"
     if log_path:
         msg += f", log: {log_path}"
     print(msg)
@@ -99,17 +99,17 @@ def cmd_start(args):
 def cmd_stop(_args):
     pid = _read_pid()
     if not pid:
-        print("Agent Hotline is not running")
+        print("WalkCode is not running")
         sys.exit(1)
 
     os.kill(pid, signal.SIGTERM)
     if _wait_exit(pid):
         _PID_FILE.unlink(missing_ok=True)
-        print(f"Agent Hotline stopped (pid {pid})")
+        print(f"WalkCode stopped (pid {pid})")
     else:
         os.kill(pid, signal.SIGKILL)
         _PID_FILE.unlink(missing_ok=True)
-        print(f"Agent Hotline killed (pid {pid})")
+        print(f"WalkCode killed (pid {pid})")
 
 
 def cmd_restart(args):
@@ -119,7 +119,7 @@ def cmd_restart(args):
         if not _wait_exit(pid):
             os.kill(pid, signal.SIGKILL)
         _PID_FILE.unlink(missing_ok=True)
-        print(f"Agent Hotline stopped (pid {pid})")
+        print(f"WalkCode stopped (pid {pid})")
 
     cmd_start(args)
 
@@ -127,9 +127,9 @@ def cmd_restart(args):
 def cmd_status(_args):
     pid = _read_pid()
     if pid:
-        print(f"Agent Hotline is running (pid {pid})")
+        print(f"WalkCode is running (pid {pid})")
     else:
-        print("Agent Hotline is not running")
+        print("WalkCode is not running")
         sys.exit(1)
 
 
@@ -143,7 +143,7 @@ def cmd_hook(args):
 
     tmux_session = detect_tmux_session()
     if not tmux_session:
-        print("[agent-hotline] not in tmux, skipping hook", file=sys.stderr)
+        print("[walkcode] not in tmux, skipping hook", file=sys.stderr)
         return
 
     cwd = os.getcwd()
@@ -158,7 +158,7 @@ def cmd_hook(args):
 
     matcher = os.environ.get("CLAUDE_NOTIFICATION_TYPE", "")
 
-    port = int(os.environ.get("AGENT_HOTLINE_PORT", os.environ.get("PORT", "3001")))
+    port = int(os.environ.get("WALKCODE_PORT", os.environ.get("PORT", "3001")))
     payload = json.dumps({
         "type": args.hook_type,
         "tty": tmux_session,
@@ -176,7 +176,7 @@ def cmd_hook(args):
         )
         urllib.request.urlopen(req, timeout=5)
     except Exception as e:
-        print(f"[agent-hotline] hook failed: {e}", file=sys.stderr)
+        print(f"[walkcode] hook failed: {e}", file=sys.stderr)
 
 
 def cmd_install_hooks(_args):
@@ -188,7 +188,7 @@ def cmd_install_hooks(_args):
     settings = json.loads(settings_path.read_text())
 
     def hook_cmd(hook_type: str, sound: str) -> str:
-        return f"afplay /System/Library/Sounds/{sound}.aiff & agent-hotline hook {hook_type}"
+        return f"afplay /System/Library/Sounds/{sound}.aiff & walkcode hook {hook_type}"
 
     settings["hooks"] = {
         "Stop": [{"matcher": "", "hooks": [
@@ -218,7 +218,7 @@ def cmd_test_inject(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="agent-hotline", description="Let your AI agent call you when it needs help")
+    parser = argparse.ArgumentParser(prog="walkcode", description="Let your AI agent call you when it needs help")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("serve", help="Start server (foreground)")

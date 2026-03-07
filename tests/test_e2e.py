@@ -9,8 +9,8 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from agent_hotline import server
-from agent_hotline.state import SessionStore
+from walkcode import server
+from walkcode.state import SessionStore
 
 
 class _Base(unittest.TestCase):
@@ -29,10 +29,13 @@ class _Base(unittest.TestCase):
         server.session_store.load()
         self.client = TestClient(server.app)
 
+        self.started_claudes = []  # [(prompt, message_id)]
+
         self._patches = [
-            mock.patch("agent_hotline.server._send", side_effect=self._fake_send),
-            mock.patch("agent_hotline.server._reply", side_effect=self._fake_reply),
-            mock.patch("agent_hotline.server._add_reaction", side_effect=self._fake_add_reaction),
+            mock.patch("walkcode.server._send", side_effect=self._fake_send),
+            mock.patch("walkcode.server._reply", side_effect=self._fake_reply),
+            mock.patch("walkcode.server._add_reaction", side_effect=self._fake_add_reaction),
+            mock.patch("walkcode.server._start_claude", side_effect=self._fake_start_claude),
         ]
         for p in self._patches:
             p.start()
@@ -56,6 +59,9 @@ class _Base(unittest.TestCase):
 
     def _fake_add_reaction(self, message_id, emoji_type):
         self.reactions.append((message_id, emoji_type))
+
+    def _fake_start_claude(self, prompt, message_id):
+        self.started_claudes.append((prompt, message_id))
 
     # -- helpers --
 
@@ -216,8 +222,8 @@ class MessageReplyTests(_Base):
 
     def test_reply_injects_text_and_reacts_success(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None), \
-             mock.patch("agent_hotline.server.inject", return_value=True) as inj:
+        with mock.patch("walkcode.server.validate_target", return_value=None), \
+             mock.patch("walkcode.server.inject", return_value=True) as inj:
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="continue",
@@ -229,8 +235,8 @@ class MessageReplyTests(_Base):
 
     def test_reply_inject_exception_reacts_failure(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None), \
-             mock.patch("agent_hotline.server.inject", side_effect=RuntimeError("boom")):
+        with mock.patch("walkcode.server.validate_target", return_value=None), \
+             mock.patch("walkcode.server.inject", side_effect=RuntimeError("boom")):
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="hello",
@@ -247,16 +253,42 @@ class MessageReplyTests(_Base):
         self.assertEqual(len(self.replied), 1)
         self.assertIn("找不到对应会话", self.replied[0][1])
 
-    def test_non_reply_message_is_ignored(self):
-        """Top-level messages (no parent/root) should not inject or error."""
+    def test_non_reply_message_starts_claude(self):
+        """Top-level messages (no parent/root) should trigger _start_claude."""
         server._on_message(self._msg_event(
             root_id="", parent_id="", message_id="user-1", text="hello",
         ))
+        self.assertEqual(len(self.started_claudes), 1)
+        self.assertEqual(self.started_claudes[0], ("hello", "user-1"))
         self.assertEqual(len(self.replied), 0)
+
+    def test_non_reply_non_text_message_is_ignored(self):
+        """Top-level non-text messages should be silently ignored."""
+        server._on_message(self._msg_event(
+            root_id="", parent_id="", message_id="user-1",
+            text="", message_type="image",
+        ))
+        self.assertEqual(len(self.started_claudes), 0)
+
+    def test_non_reply_empty_text_is_ignored(self):
+        """Top-level messages with only whitespace/mentions should be ignored."""
+        server._on_message(self._msg_event(
+            root_id="", parent_id="", message_id="user-1", text="@_user_1 ",
+        ))
+        self.assertEqual(len(self.started_claudes), 0)
+
+    def test_non_reply_strips_mention_before_start(self):
+        """@mention should be stripped before passing to _start_claude."""
+        server._on_message(self._msg_event(
+            root_id="", parent_id="", message_id="user-1",
+            text="@_user_1 build the app",
+        ))
+        self.assertEqual(len(self.started_claudes), 1)
+        self.assertEqual(self.started_claudes[0][0], "build the app")
 
     def test_non_text_message_rejected(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None):
+        with mock.patch("walkcode.server.validate_target", return_value=None):
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="", message_type="image",
@@ -266,7 +298,7 @@ class MessageReplyTests(_Base):
 
     def test_empty_text_reply_is_ignored(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None):
+        with mock.patch("walkcode.server.validate_target", return_value=None):
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="   ",
@@ -275,7 +307,7 @@ class MessageReplyTests(_Base):
 
     def test_reply_with_dead_tmux_session_returns_warning(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value="session not found"):
+        with mock.patch("walkcode.server.validate_target", return_value="session not found"):
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="hello",
@@ -284,8 +316,8 @@ class MessageReplyTests(_Base):
 
     def test_reply_strips_mention_before_inject(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None), \
-             mock.patch("agent_hotline.server.inject", return_value=True) as inj:
+        with mock.patch("walkcode.server.validate_target", return_value=None), \
+             mock.patch("walkcode.server.inject", return_value=True) as inj:
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="@_user_1 continue working",
@@ -294,7 +326,7 @@ class MessageReplyTests(_Base):
 
     def test_reply_mention_only_is_ignored(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None):
+        with mock.patch("walkcode.server.validate_target", return_value=None):
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="user-1", text="@_user_1 ",
@@ -312,8 +344,8 @@ class CardActionTests(_Base):
 
     def test_card_action_injects_and_returns_success(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None), \
-             mock.patch("agent_hotline.server.inject", return_value=True) as inj:
+        with mock.patch("walkcode.server.validate_target", return_value=None), \
+             mock.patch("walkcode.server.inject", return_value=True) as inj:
             resp = server._on_card_action(self._card_event(cmd="y", sid="session-1"))
         inj.assert_called_once_with("claude-project-123", "y")
         self.assertEqual(resp.toast.type, "success")
@@ -322,8 +354,8 @@ class CardActionTests(_Base):
 
     def test_card_action_inject_failure_returns_error(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None), \
-             mock.patch("agent_hotline.server.inject", side_effect=RuntimeError("no tab")):
+        with mock.patch("walkcode.server.validate_target", return_value=None), \
+             mock.patch("walkcode.server.inject", side_effect=RuntimeError("no tab")):
             resp = server._on_card_action(self._card_event(cmd="y", sid="session-1"))
         self.assertEqual(resp.toast.type, "error")
         self.assertIn("注入失败", resp.toast.content)
@@ -349,7 +381,7 @@ class CardActionTests(_Base):
 
     def test_card_action_dead_tmux_session_returns_error(self):
         self._setup_session()
-        with mock.patch("agent_hotline.server.validate_target", return_value="session not found"):
+        with mock.patch("walkcode.server.validate_target", return_value="session not found"):
             resp = server._on_card_action(self._card_event(cmd="y", sid="session-1"))
         self.assertEqual(resp.toast.type, "error")
 
@@ -370,8 +402,8 @@ class MultiSessionTests(_Base):
             injected_targets.append((session_name, text))
             return True
 
-        with mock.patch("agent_hotline.server.validate_target", return_value=None), \
-             mock.patch("agent_hotline.server.inject", side_effect=fake_inject):
+        with mock.patch("walkcode.server.validate_target", return_value=None), \
+             mock.patch("walkcode.server.inject", side_effect=fake_inject):
             server._on_message(self._msg_event(
                 root_id="root-1", parent_id="root-1",
                 message_id="u1", text="for proj-a",
@@ -380,8 +412,8 @@ class MultiSessionTests(_Base):
         self.assertEqual(injected_targets, [("claude-proj-a-111", "for proj-a")])
 
         injected_targets.clear()
-        with mock.patch("agent_hotline.server.validate_target", return_value=None), \
-             mock.patch("agent_hotline.server.inject", side_effect=fake_inject):
+        with mock.patch("walkcode.server.validate_target", return_value=None), \
+             mock.patch("walkcode.server.inject", side_effect=fake_inject):
             server._on_message(self._msg_event(
                 root_id="root-2", parent_id="root-2",
                 message_id="u2", text="for proj-b",
@@ -431,6 +463,76 @@ class PersistenceTests(_Base):
         resp = self._post_hook(session_id="s1", message="after restart")
         self.assertTrue(resp.json()["ok"])
         self.assertEqual(resp.json()["thread"], "root-1")
+
+
+# =========================================================================
+# 8. Feishu-initiated Claude Code (pending_roots)
+# =========================================================================
+
+class FeishuInitiatedTests(_Base):
+    def test_pending_root_links_to_feishu_thread(self):
+        """When _pending_roots has a tmux name, hook should reuse that root."""
+        server._pending_roots["walkcode-12345"] = "feishu-msg-100"
+
+        resp = self._post_hook(
+            session_id="s1", tty="walkcode-12345",
+            cwd="/tmp/project", message="started",
+        )
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["msg_id"], "feishu-msg-100")
+
+        # Should NOT create a new root message
+        self.assertEqual(len(self.sent), 0)
+        # Should reply to existing Feishu message
+        self.assertEqual(len(self.replied), 1)
+        parent_id, content = self.replied[0]
+        self.assertEqual(parent_id, "feishu-msg-100")
+        self.assertEqual(content, "started")
+
+        # Session should be stored with the Feishu root
+        session = server.session_store.get("s1")
+        self.assertIsNotNone(session)
+        self.assertEqual(session.root_msg_id, "feishu-msg-100")
+
+        # pending_roots should be consumed
+        self.assertNotIn("walkcode-12345", server._pending_roots)
+
+    def test_pending_root_not_consumed_by_wrong_tty(self):
+        """pending_roots entry should only match by tmux session name."""
+        server._pending_roots["walkcode-12345"] = "feishu-msg-100"
+
+        resp = self._post_hook(
+            session_id="s1", tty="walkcode-other",
+            cwd="/tmp/project", message="started",
+        )
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        # Should create a new root (not reuse pending)
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("walkcode-12345", server._pending_roots)
+
+    def test_subsequent_hook_after_pending_replies_to_thread(self):
+        """After pending_roots linking, subsequent hooks reply to same thread."""
+        server._pending_roots["walkcode-12345"] = "feishu-msg-100"
+
+        # First hook: consumes pending root
+        self._post_hook(
+            session_id="s1", tty="walkcode-12345",
+            cwd="/tmp/project", message="first",
+        )
+        self.replied.clear()
+
+        # Second hook: existing session, should reply to feishu-msg-100
+        resp = self._post_hook(
+            session_id="s1", tty="walkcode-12345",
+            cwd="/tmp/project", message="second",
+        )
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["thread"], "feishu-msg-100")
+        self.assertEqual(len(self.replied), 1)
+        self.assertEqual(self.replied[0][0], "feishu-msg-100")
 
 
 if __name__ == "__main__":

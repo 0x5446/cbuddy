@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-logger = logging.getLogger("agent_hotline.state")
+logger = logging.getLogger("walkcode.state")
 
 
 @dataclass

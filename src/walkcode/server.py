@@ -1,10 +1,12 @@
-"""Agent Hotline server: FastAPI for hooks + Feishu WebSocket for events."""
+"""WalkCode server: FastAPI for hooks + Feishu WebSocket for events."""
 
 import json
 import logging
 import random
 import re
+import subprocess
 import threading
+import time
 from os.path import basename
 
 import lark_oapi as lark
@@ -32,9 +34,9 @@ from .config import Config
 from .state import Session, SessionStore
 from .tty import inject, validate_target
 
-logger = logging.getLogger("agent_hotline")
+logger = logging.getLogger("walkcode")
 
-app = FastAPI(title="Agent Hotline", version="0.3.0")
+app = FastAPI(title="WalkCode", version="0.4.0")
 
 # --- State ---
 
@@ -43,6 +45,7 @@ lark_client: lark.Client = None  # type: ignore
 session_store: SessionStore = None  # type: ignore
 _TTL = 86400  # 24h
 _STALE_SESSION_MESSAGE = "⚠️ tmux 会话已失效，请等待 Claude 的下一条通知刷新会话"
+_pending_roots: dict[str, str] = {}  # tmux_session_name → root_msg_id
 
 
 def _resolve_session_id(msg) -> str | None:
@@ -272,6 +275,32 @@ def _on_card_action(data: P2CardActionTrigger) -> P2CardActionTriggerResponse:
     return resp
 
 
+def _start_claude(prompt: str, message_id: str):
+    """Start a Claude Code instance in a tmux session, triggered from Feishu."""
+    cwd = config.default_cwd
+    tmux_name = f"walkcode-{int(time.time())}"
+    escaped = prompt.replace("'", "'\\''")
+    cmd = f"cd '{cwd}' && claude '{escaped}'"
+
+    try:
+        result = subprocess.run(
+            ["tmux", "new-session", "-d", "-s", tmux_name, cmd],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            logger.error(f"tmux new-session failed: {result.stderr.strip()}")
+            _reply(message_id, f"⚠️ 启动失败: {result.stderr.strip()}", reply_in_thread=True)
+            return
+    except Exception as e:
+        logger.error(f"Start Claude failed: {e}")
+        _reply(message_id, f"⚠️ 启动失败: {e}", reply_in_thread=True)
+        return
+
+    _pending_roots[tmux_name] = message_id
+    _reply(message_id, f"🚀 已启动 Claude Code\ntmux attach -t {tmux_name}", reply_in_thread=True)
+    logger.info(f"Started Claude Code: tmux={tmux_name} cwd={cwd} prompt={prompt[:50]}")
+
+
 def _on_message(data: P2ImMessageReceiveV1):
     msg = data.event.message
     parent_id = msg.parent_id
@@ -279,7 +308,17 @@ def _on_message(data: P2ImMessageReceiveV1):
     message_id = msg.message_id
 
     if not parent_id and not root_id:
-        logger.info(f"Non-reply message from {msg.sender.sender_id.open_id} (use this open_id for FEISHU_RECEIVE_ID)")
+        # Non-reply message: start a new Claude Code instance
+        if msg.message_type != "text":
+            return
+        try:
+            text = json.loads(msg.content).get("text", "").strip()
+        except (json.JSONDecodeError, TypeError):
+            return
+        text = _MENTION_RE.sub("", text).strip()
+        if not text:
+            return
+        _start_claude(text, message_id)
         return
 
     session_id = _resolve_session_id(msg)
@@ -357,13 +396,28 @@ async def receive_hook(request: Request):
         if msg_id:
             return {"ok": True, "msg_id": msg_id, "thread": session.root_msg_id}
     else:
-        # New session: send title as thread root, reply with content
+        # New session: check if Feishu-initiated (pending root exists)
+        pending_root = _pending_roots.pop(tty, None)
+        if pending_root:
+            # Feishu-initiated: reuse existing thread
+            root_id = pending_root
+            if session_id:
+                session_store.upsert(session_id, tty=tty, cwd=cwd, root_msg_id=root_id)
+            if needs_card:
+                card = _build_card(message, session_id)
+                _reply(root_id, card=card, reply_in_thread=True)
+            elif message:
+                _reply(root_id, text=message, reply_in_thread=True)
+            else:
+                _reply(root_id, text=effective_type, reply_in_thread=True)
+            return {"ok": True, "msg_id": root_id}
+
+        # User-initiated: send title as thread root, reply with content
         title = _make_title(cwd, message)
         root_id = _send(text=title)
         if root_id:
             if session_id:
                 session_store.upsert(session_id, tty=tty, cwd=cwd, root_msg_id=root_id)
-            # Reply with content to create thread (reply_in_thread=True)
             if needs_card:
                 card = _build_card(message, session_id)
                 _reply(root_id, card=card, reply_in_thread=True)

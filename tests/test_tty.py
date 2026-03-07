@@ -1,13 +1,13 @@
 import unittest
 from unittest import mock
 
-from agent_hotline import tty
+from walkcode import tty
 
 
 class TmuxDetectionTests(unittest.TestCase):
     def test_detect_tmux_session_returns_name_when_in_tmux(self):
         with mock.patch.dict("os.environ", {"TMUX": "/tmp/tmux-501/default,12345,0"}), \
-             mock.patch("agent_hotline.tty.subprocess.run") as mock_run:
+             mock.patch("walkcode.tty.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0, stdout="claude-myproject-99\n")
             session = tty.detect_tmux_session()
 
@@ -21,7 +21,7 @@ class TmuxDetectionTests(unittest.TestCase):
 
     def test_detect_tmux_session_returns_empty_on_command_failure(self):
         with mock.patch.dict("os.environ", {"TMUX": "/tmp/tmux-501/default,12345,0"}), \
-             mock.patch("agent_hotline.tty.subprocess.run") as mock_run:
+             mock.patch("walkcode.tty.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=1, stdout="")
             session = tty.detect_tmux_session()
 
@@ -30,14 +30,14 @@ class TmuxDetectionTests(unittest.TestCase):
 
 class ValidateTargetTests(unittest.TestCase):
     def test_validate_target_returns_none_when_session_exists(self):
-        with mock.patch("agent_hotline.tty.subprocess.run") as mock_run:
+        with mock.patch("walkcode.tty.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
             error = tty.validate_target("claude-proj-123")
 
         self.assertIsNone(error)
 
     def test_validate_target_returns_error_when_session_missing(self):
-        with mock.patch("agent_hotline.tty.subprocess.run") as mock_run:
+        with mock.patch("walkcode.tty.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=1)
             error = tty.validate_target("dead-session")
 
@@ -48,7 +48,7 @@ class ValidateTargetTests(unittest.TestCase):
         self.assertIn("No tmux session", error)
 
     def test_validate_target_returns_error_when_tmux_not_installed(self):
-        with mock.patch("agent_hotline.tty.subprocess.run", side_effect=FileNotFoundError):
+        with mock.patch("walkcode.tty.subprocess.run", side_effect=FileNotFoundError):
             error = tty.validate_target("some-session")
 
         self.assertIn("not installed", error)
@@ -56,8 +56,8 @@ class ValidateTargetTests(unittest.TestCase):
 
 class InjectTests(unittest.TestCase):
     def test_inject_sends_text_and_enter(self):
-        with mock.patch("agent_hotline.tty.validate_target", return_value=None), \
-             mock.patch("agent_hotline.tty.subprocess.run") as mock_run:
+        with mock.patch("walkcode.tty.validate_target", return_value=None), \
+             mock.patch("walkcode.tty.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
             result = tty.inject("claude-proj-123", "hello world")
 
@@ -71,8 +71,8 @@ class InjectTests(unittest.TestCase):
         self.assertEqual(args2, ["tmux", "send-keys", "-t", "claude-proj-123", "Enter"])
 
     def test_inject_single_key_no_enter(self):
-        with mock.patch("agent_hotline.tty.validate_target", return_value=None), \
-             mock.patch("agent_hotline.tty.subprocess.run") as mock_run:
+        with mock.patch("walkcode.tty.validate_target", return_value=None), \
+             mock.patch("walkcode.tty.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
             tty.inject("claude-proj-123", "y")
 
@@ -80,13 +80,13 @@ class InjectTests(unittest.TestCase):
         self.assertEqual(mock_run.call_count, 1)
 
     def test_inject_raises_on_invalid_target(self):
-        with mock.patch("agent_hotline.tty.validate_target", return_value="session not found"):
+        with mock.patch("walkcode.tty.validate_target", return_value="session not found"):
             with self.assertRaises(RuntimeError):
                 tty.inject("dead-session", "hello")
 
     def test_inject_raises_on_send_keys_failure(self):
-        with mock.patch("agent_hotline.tty.validate_target", return_value=None), \
-             mock.patch("agent_hotline.tty.subprocess.run") as mock_run:
+        with mock.patch("walkcode.tty.validate_target", return_value=None), \
+             mock.patch("walkcode.tty.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=1, stderr="session not found")
             with self.assertRaises(RuntimeError) as ctx:
                 tty.inject("claude-proj-123", "hello")
