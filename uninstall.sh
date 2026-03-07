@@ -180,7 +180,7 @@ main() {
   echo "  6. Install directory ($INSTALL_DIR)"
   echo ""
   printf "Continue? [y/N] "
-  read -r answer
+  read -r answer </dev/tty
   if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
     echo "Aborted."
     exit 0
