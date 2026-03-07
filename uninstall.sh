@@ -7,7 +7,17 @@ set -euo pipefail
 
 INSTALL_DIR="${WALKCODE_DIR:-$HOME/walkcode}"
 RUNTIME_DIR="$HOME/.walkcode"
-SHELL_RC=""
+
+# All candidate shell rc files (same strategy as rustup/nvm/uv)
+RC_CANDIDATES=(
+  "$HOME/.zshrc"
+  "$HOME/.zshenv"
+  "$HOME/.zprofile"
+  "$HOME/.bashrc"
+  "$HOME/.bash_profile"
+  "$HOME/.bash_login"
+  "$HOME/.profile"
+)
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -18,17 +28,6 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[walkcode]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[walkcode]${NC} $*"; }
 error() { echo -e "${RED}[walkcode]${NC} $*" >&2; }
-
-# --- Detect shell rc file ---
-detect_shell_rc() {
-  if [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "$SHELL")" = "zsh" ]; then
-    SHELL_RC="$HOME/.zshrc"
-  elif [ -n "${BASH_VERSION:-}" ] || [ "$(basename "$SHELL")" = "bash" ]; then
-    SHELL_RC="$HOME/.bashrc"
-  else
-    SHELL_RC="$HOME/.profile"
-  fi
-}
 
 # --- Stop daemon if running ---
 stop_daemon() {
@@ -47,25 +46,24 @@ stop_daemon() {
   fi
 }
 
-# --- Remove shell wrapper ---
+# --- Remove shell wrapper from ALL candidate rc files ---
 remove_shell_wrapper() {
-  detect_shell_rc
-  if [ ! -f "$SHELL_RC" ]; then
-    return
-  fi
-
   local marker_start="# >>> walkcode claude wrapper >>>"
   local marker_end="# <<< walkcode claude wrapper <<<"
+  local found=0
 
-  if grep -q "$marker_start" "$SHELL_RC" 2>/dev/null; then
-    info "Removing shell wrapper from $SHELL_RC..."
-    # Delete from marker_start to marker_end (inclusive), plus the blank line before
-    sed -i.walkcode-bak "/$marker_start/,/$marker_end/d" "$SHELL_RC"
-    # Remove backup
-    rm -f "${SHELL_RC}.walkcode-bak"
-    info "Shell wrapper removed"
-  else
-    info "No shell wrapper found in $SHELL_RC, skipping"
+  for rc in "${RC_CANDIDATES[@]}"; do
+    [ -f "$rc" ] || continue
+    if grep -q "$marker_start" "$rc" 2>/dev/null; then
+      info "Removing shell wrapper from $rc..."
+      sed -i.walkcode-bak "/$marker_start/,/$marker_end/d" "$rc"
+      rm -f "${rc}.walkcode-bak"
+      found=1
+    fi
+  done
+
+  if [ "$found" -eq 0 ]; then
+    info "No shell wrapper found in any shell rc file, skipping"
   fi
 }
 
@@ -154,7 +152,7 @@ main() {
 
   echo "This will remove:"
   echo "  1. WalkCode daemon (if running)"
-  echo "  2. Shell wrapper from ${SHELL_RC:-~/.zshrc}"
+  echo "  2. Shell wrapper from all rc files (.zshrc, .bashrc, .profile, etc.)"
   echo "  3. Claude Code hooks from ~/.claude/settings.json"
   echo "  4. Runtime directory ($RUNTIME_DIR)"
   echo "  5. Install directory ($INSTALL_DIR)"
@@ -175,10 +173,8 @@ main() {
 
   echo ""
   info "WalkCode has been completely removed."
-  detect_shell_rc
   echo ""
-  echo "  Run: source $SHELL_RC"
-  echo "  to apply shell changes in the current session."
+  echo "  Restart your shell or run 'exec \$SHELL' to apply changes."
   echo ""
 }
 
