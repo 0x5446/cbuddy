@@ -71,6 +71,14 @@ curl -fsSL https://raw.githubusercontent.com/0x5446/walkcode/main/install.sh | b
 
 This installs tmux/uv if missing, clones the repo, runs `uv sync`, creates `.env`, adds a shell wrapper to `~/.zshrc`, and installs Claude Code hooks. [Review the script](install.sh) before running if you prefer.
 
+### Uninstall
+
+```bash
+bash ~/walkcode/uninstall.sh
+```
+
+Removes the daemon, shell wrapper, Claude Code hooks, runtime data, and install directory. [Review the script](uninstall.sh) before running if you prefer.
+
 ### Manual Install
 
 <details>

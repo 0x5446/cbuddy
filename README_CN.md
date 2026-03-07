@@ -75,6 +75,14 @@ curl -fsSL https://raw.githubusercontent.com/0x5446/walkcode/main/install.sh | b
 
 自动完成：安装 tmux/uv → 克隆仓库 → `uv sync` → 创建 `.env` → 注入 Shell Wrapper → 安装 Hooks。运行前可先[查看脚本内容](install.sh)。
 
+### 一键卸载
+
+```bash
+bash ~/walkcode/uninstall.sh
+```
+
+清理守护进程、Shell Wrapper、Claude Code Hooks、运行时数据和安装目录。运行前可先[查看脚本内容](uninstall.sh)。
+
 ### 手动安装
 
 <details>
