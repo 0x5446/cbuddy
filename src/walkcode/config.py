@@ -2,12 +2,14 @@ import os
 from pathlib import Path
 from dataclasses import dataclass
 
+from .i18n import t
+
 
 @dataclass
 class Config:
     feishu_app_id: str
     feishu_app_secret: str
-    feishu_receive_id: str
+    feishu_receive_id: str  # may be empty during initial setup
     feishu_receive_id_type: str  # "open_id" or "chat_id"
     port: int = 3001
     state_path: Path = Path.home() / ".walkcode" / "state.json"
@@ -27,16 +29,16 @@ class Config:
                     os.environ[key.strip()] = value.strip()
 
         missing = []
-        for key in ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_RECEIVE_ID"]:
+        for key in ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]:
             if not os.environ.get(key):
                 missing.append(key)
         if missing:
-            raise SystemExit(f"Missing required env vars: {', '.join(missing)}\nSee .env.example")
+            raise SystemExit(t("config.missing_vars", vars=", ".join(missing)))
 
         return cls(
             feishu_app_id=os.environ["FEISHU_APP_ID"],
             feishu_app_secret=os.environ["FEISHU_APP_SECRET"],
-            feishu_receive_id=os.environ["FEISHU_RECEIVE_ID"],
+            feishu_receive_id=os.environ.get("FEISHU_RECEIVE_ID", ""),
             feishu_receive_id_type=os.environ.get("FEISHU_RECEIVE_ID_TYPE", "open_id"),
             port=int(os.environ.get("PORT", "3001")),
             state_path=Path(

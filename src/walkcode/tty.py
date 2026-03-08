@@ -3,6 +3,8 @@
 import os
 import subprocess
 
+from .i18n import t
+
 # Single-key replies that should NOT have a newline appended
 SINGLE_KEYS = {"y", "n", "a", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}
 
@@ -26,18 +28,18 @@ def detect_tmux_session() -> str:
 def validate_target(session_name: str) -> str | None:
     """Check if tmux session exists. Returns error message or None."""
     if not session_name:
-        return "No tmux session specified"
+        return t("tty.no_session")
     try:
         result = subprocess.run(
             ["tmux", "has-session", "-t", session_name],
             capture_output=True, text=True, timeout=2,
         )
         if result.returncode != 0:
-            return f"tmux session '{session_name}' not found (Claude exited?)"
+            return t("tty.not_found", name=session_name)
     except FileNotFoundError:
-        return "tmux is not installed"
+        return t("tty.not_installed")
     except Exception as e:
-        return f"tmux check failed: {e}"
+        return t("tty.check_failed", error=e)
     return None
 
 

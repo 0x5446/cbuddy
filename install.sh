@@ -19,6 +19,14 @@ info()  { echo -e "${GREEN}[walkcode]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[walkcode]${NC} $*"; }
 error() { echo -e "${RED}[walkcode]${NC} $*" >&2; }
 
+# --- i18n ---
+is_zh() {
+  case "${LANG:-}${LANGUAGE:-}" in zh*) return 0 ;; esac
+  return 1
+}
+# msg "English text" "中文文本"
+msg() { if is_zh; then echo "$2"; else echo "$1"; fi; }
+
 # --- Detect shell rc file ---
 detect_shell_rc() {
   if [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "$SHELL")" = "zsh" ]; then
@@ -36,7 +44,7 @@ check_prereqs() {
 
   if ! command -v tmux &>/dev/null; then
     if command -v brew &>/dev/null; then
-      info "Installing tmux via Homebrew..."
+      info "$(msg "Installing tmux via Homebrew..." "正在通过 Homebrew 安装 tmux...")"
       brew install tmux
     else
       missing+=("tmux (brew install tmux)")
@@ -44,13 +52,13 @@ check_prereqs() {
   fi
 
   if ! command -v uv &>/dev/null; then
-    info "Installing uv..."
+    info "$(msg "Installing uv..." "正在安装 uv...")"
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
   fi
 
   if [ ${#missing[@]} -gt 0 ]; then
-    error "Missing prerequisites: ${missing[*]}"
+    error "$(msg "Missing prerequisites: ${missing[*]}" "缺少前置依赖: ${missing[*]}")"
     exit 1
   fi
 }
@@ -69,11 +77,11 @@ install_package() {
   tag=$(get_latest_tag)
 
   if [ -n "$tag" ]; then
-    info "Installing WalkCode ${tag}..."
+    info "$(msg "Installing WalkCode ${tag}..." "正在安装 WalkCode ${tag}...")"
     uv tool install "git+${GITHUB_URL}@${tag}" --force 2>/dev/null \
       || uv tool install "git+${GITHUB_URL}@${tag}"
   else
-    info "No releases found, installing from main branch..."
+    info "$(msg "No releases found, installing from main branch..." "未找到正式版本，从 main 分支安装...")"
     uv tool install "git+${GITHUB_URL}" --force 2>/dev/null \
       || uv tool install "git+${GITHUB_URL}"
   fi
@@ -92,31 +100,40 @@ setup_config() {
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 
-# Who receives notifications (required)
+# Who receives notifications
 # Use open_id for direct messages, or chat_id for group chats
+# Run "walkcode serve" to discover your open_id
 FEISHU_RECEIVE_ID=
 FEISHU_RECEIVE_ID_TYPE=open_id
 
 # Server port (optional, default 3001)
 # PORT=3001
 ENVFILE
-    warn ".env created — edit $CONFIG_DIR/.env with your Feishu credentials"
+    warn "$(msg \
+      ".env created — edit $CONFIG_DIR/.env with your Feishu credentials" \
+      ".env 已创建 — 请编辑 $CONFIG_DIR/.env 填入你的飞书凭证")"
   else
-    info ".env already exists, skipping"
+    info "$(msg ".env already exists, skipping" ".env 已存在，跳过")"
   fi
 }
 
 # --- Install shell wrapper ---
 install_wrapper() {
-  detect_shell_rc
-
-  local marker="# >>> walkcode claude wrapper >>>"
-  if grep -q "$marker" "$SHELL_RC" 2>/dev/null; then
-    info "Shell wrapper already installed in $SHELL_RC"
+  if ! command -v claude &>/dev/null; then
+    warn "$(msg \
+      "Claude Code CLI not found. Install it first: https://docs.anthropic.com/en/docs/claude-code" \
+      "未找到 Claude Code CLI，请先安装: https://docs.anthropic.com/en/docs/claude-code")"
+    warn "$(msg "Skipping shell wrapper installation." "跳过 shell wrapper 安装。")"
     return
   fi
 
-  info "Adding claude wrapper to $SHELL_RC..."
+  local marker="# >>> walkcode claude wrapper >>>"
+  if grep -q "$marker" "$SHELL_RC" 2>/dev/null; then
+    info "$(msg "Shell wrapper already installed in $SHELL_RC" "Shell wrapper 已安装在 $SHELL_RC 中")"
+    return
+  fi
+
+  info "$(msg "Adding claude wrapper to $SHELL_RC..." "正在将 claude wrapper 添加到 $SHELL_RC...")"
   cat >> "$SHELL_RC" << 'WRAPPER'
 
 # >>> walkcode claude wrapper >>>
@@ -131,7 +148,7 @@ claude() {
 # <<< walkcode claude wrapper <<<
 WRAPPER
 
-  info "Shell wrapper installed. Run: source $SHELL_RC"
+  info "$(msg "Shell wrapper installed. Run: source $SHELL_RC" "Shell wrapper 已安装。请执行: source $SHELL_RC")"
 }
 
 # --- Configure tmux ---
@@ -140,11 +157,11 @@ configure_tmux() {
   local marker="# >>> walkcode tmux config >>>"
 
   if grep -q "$marker" "$tmux_conf" 2>/dev/null; then
-    info "tmux config already present in $tmux_conf"
+    info "$(msg "tmux config already present in $tmux_conf" "tmux 配置已存在于 $tmux_conf")"
     return
   fi
 
-  info "Adding tmux scrollback config to $tmux_conf..."
+  info "$(msg "Adding tmux scrollback config to $tmux_conf..." "正在将 tmux scrollback 配置添加到 $tmux_conf...")"
   cat >> "$tmux_conf" << 'TMUXCFG'
 
 # >>> walkcode tmux config >>>
@@ -156,19 +173,23 @@ TMUXCFG
 
   # Hot-reload if tmux server is running
   tmux source-file "$tmux_conf" 2>/dev/null || true
-  info "tmux config installed"
+  info "$(msg "tmux config installed" "tmux 配置已安装")"
 }
 
 # --- Install Claude Code hooks ---
 install_hooks() {
   local settings="$HOME/.claude/settings.json"
   if [ ! -f "$settings" ]; then
-    warn "$settings not found — skipping hook installation"
-    warn "Run 'walkcode install-hooks' after Claude Code is set up"
+    warn "$(msg \
+      "$settings not found — skipping hook installation" \
+      "$settings 未找到 — 跳过 hook 安装")"
+    warn "$(msg \
+      "Run 'walkcode install-hooks' after Claude Code is set up" \
+      "请在 Claude Code 设置好后执行 'walkcode install-hooks'")"
     return
   fi
 
-  info "Installing Claude Code hooks..."
+  info "$(msg "Installing Claude Code hooks..." "正在安装 Claude Code hooks...")"
   walkcode install-hooks
 }
 
@@ -182,6 +203,7 @@ main() {
   echo ""
 
   check_prereqs
+  detect_shell_rc
   install_package
   setup_config
   install_wrapper
@@ -190,22 +212,36 @@ main() {
 
   # Restart daemon if already running (upgrade scenario)
   if command -v walkcode &>/dev/null && walkcode status &>/dev/null; then
-    info "Restarting WalkCode daemon..."
+    info "$(msg "Restarting WalkCode daemon..." "正在重启 WalkCode 守护进程...")"
     walkcode restart
   fi
 
   echo ""
-  info "Installation complete!"
+  info "$(msg "Installation complete!" "安装完成！")"
   echo ""
-  echo "  Next steps:"
-  echo "  1. Edit $CONFIG_DIR/.env with your Feishu credentials"
-  echo "  2. source $SHELL_RC"
-  echo "  3. walkcode start"
-  echo "  4. Send a message to your Feishu bot to get your open_id"
-  echo "  5. Add open_id to .env, restart, and go for a walk"
+  if is_zh; then
+    echo "  后续步骤:"
+    echo "  1. 编辑 $CONFIG_DIR/.env 填入飞书凭证 (APP_ID & APP_SECRET)"
+    echo "  2. source $SHELL_RC"
+    echo "  3. walkcode serve"
+    echo "  4. 向飞书机器人发送一条消息 — open_id 会显示在控制台"
+    echo "  5. 将 open_id 添加到 .env，然后执行: walkcode restart"
+  else
+    echo "  Next steps:"
+    echo "  1. Edit $CONFIG_DIR/.env with your Feishu credentials (APP_ID & APP_SECRET)"
+    echo "  2. source $SHELL_RC"
+    echo "  3. walkcode serve"
+    echo "  4. Send a message to your Feishu bot — open_id will be printed"
+    echo "  5. Add open_id to .env, then run: walkcode restart"
+  fi
   echo ""
-  echo "  Recommended: prevent macOS from sleeping on AC power so the network"
-  echo "  stays up while you're away (display can still turn off):"
+  if is_zh; then
+    echo "  建议: 在接通电源时禁止 macOS 休眠以保持网络连接"
+    echo "  (屏幕仍会关闭):"
+  else
+    echo "  Recommended: prevent macOS from sleeping on AC power so the network"
+    echo "  stays up while you're away (display can still turn off):"
+  fi
   echo ""
   echo "    sudo pmset -c sleep 0 && sudo pmset -c disksleep 0 \\"
   echo "         && sudo pmset -c standby 0 && sudo pmset -c hibernatemode 0"

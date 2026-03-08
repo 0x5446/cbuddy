@@ -10,6 +10,8 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from walkcode import server
+from walkcode.config import Config
+from walkcode.i18n import t
 from walkcode.state import SessionStore
 
 
@@ -28,6 +30,11 @@ class _Base(unittest.TestCase):
 
         server.session_store = SessionStore(self.state_path)
         server.session_store.load()
+        server.config = SimpleNamespace(
+            feishu_receive_id="ou_test_receive",
+            feishu_receive_id_type="open_id",
+            default_cwd="/tmp/workspace",
+        )
         self.client = TestClient(server.app)
 
         self.started_claudes = []  # [(prompt, message_id)]
@@ -252,7 +259,7 @@ class MessageReplyTests(_Base):
             message_id="user-1", text="hello",
         ))
         self.assertEqual(len(self.replied), 1)
-        self.assertIn("找不到对应会话", self.replied[0][1])
+        self.assertIn(t("feishu.session_not_found"), self.replied[0][1])
 
     def test_non_reply_message_starts_claude(self):
         """Top-level messages (no parent/root) should trigger _start_claude."""
@@ -295,7 +302,7 @@ class MessageReplyTests(_Base):
                 message_id="user-1", text="", message_type="image",
             ))
         self.assertEqual(len(self.replied), 1)
-        self.assertIn("只支持文本", self.replied[0][1])
+        self.assertIn(t("feishu.text_only"), self.replied[0][1])
 
     def test_empty_text_reply_is_ignored(self):
         self._setup_session()
@@ -385,7 +392,7 @@ class MultiSessionTests(_Base):
             root_id="root-999", parent_id="root-999",
             message_id="u1", text="stray",
         ))
-        self.assertIn("找不到对应会话", self.replied[0][1])
+        self.assertIn(t("feishu.session_not_found"), self.replied[0][1])
 
 
 # =========================================================================
@@ -525,7 +532,7 @@ class IdleReaperTests(_Base):
 
         mock_kill.assert_called_once_with("walkcode-old")
         # Should have notified in the thread
-        notify_replies = [r for r in self.replied if "无活动已关闭" in str(r[1])]
+        notify_replies = [r for r in self.replied if t("feishu.idle_killed") in str(r[1])]
         self.assertEqual(len(notify_replies), 1)
 
     def test_reap_skips_active_session(self):

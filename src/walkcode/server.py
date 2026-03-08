@@ -26,6 +26,7 @@ from lark_oapi.api.im.v1.model.emoji import Emoji
 from fastapi import FastAPI, Request
 
 from .config import Config
+from .i18n import t
 from .state import Session, SessionStore
 from .tty import inject, validate_target, get_session_activity, kill_session
 
@@ -40,7 +41,15 @@ lark_client: lark.Client = None  # type: ignore
 session_store: SessionStore = None  # type: ignore
 _IDLE_TIMEOUT = 7200  # 2h — kill tmux sessions idle longer than this
 _REAPER_INTERVAL = 600  # 10min — how often the idle reaper runs
-_STALE_SESSION_MESSAGE = "⚠️ tmux 会话已失效，请等待 Claude 的下一条通知刷新会话"
+
+
+def _labels() -> dict[str, str]:
+    return {
+        "stop": t("feishu.label.stop"),
+        "permission_prompt": t("feishu.label.permission"),
+        "idle_prompt": t("feishu.label.idle"),
+        "elicitation_dialog": t("feishu.label.elicitation"),
+    }
 
 
 def _resolve_session_id(msg) -> str | None:
@@ -69,13 +78,6 @@ def _load_reply_session(session_id: str) -> tuple[Session | None, str | None]:
 
 # --- Feishu helpers ---
 
-_LABELS = {
-    "stop": "✅ 任务完成",
-    "permission_prompt": "🔐 需要权限确认",
-    "idle_prompt": "⏳ 等待你的输入",
-    "elicitation_dialog": "📋 请选择",
-}
-
 _SUCCESS_EMOJIS = [
     "THUMBSUP", "OK", "JIAYI", "MUSCLE", "DONE", "YEAH", "APPLAUSE",
     "Fire", "LGTM", "CheckMark", "Hundred", "SMILE", "Get", "OnIt",
@@ -102,6 +104,9 @@ def _make_title(cwd: str, session_id: str = "", message: str = "") -> str:
 
 
 def _send(text: str) -> str | None:
+    if not config.feishu_receive_id:
+        logger.warning("Cannot send: FEISHU_RECEIVE_ID not configured")
+        return None
     msg_type = "text"
     content = json.dumps({"text": text})
     body = CreateMessageRequestBody.builder() \
@@ -182,15 +187,15 @@ def _start_claude(prompt: str, message_id: str):
         )
         if result.returncode != 0:
             logger.error(f"tmux new-session failed: {result.stderr.strip()}")
-            _reply(message_id, f"⚠️ 启动失败: {result.stderr.strip()}", reply_in_thread=True)
+            _reply(message_id, t("feishu.start_failed", error=result.stderr.strip()), reply_in_thread=True)
             return
     except Exception as e:
         logger.error(f"Start Claude failed: {e}")
-        _reply(message_id, f"⚠️ 启动失败: {e}", reply_in_thread=True)
+        _reply(message_id, t("feishu.start_failed", error=e), reply_in_thread=True)
         return
 
     session_store.add_pending(tmux_name, message_id)
-    reply_id = _reply(message_id, f"🚀 已启动 Claude Code\ntmux attach -t {tmux_name}", reply_in_thread=True)
+    reply_id = _reply(message_id, t("feishu.started", tmux=tmux_name), reply_in_thread=True)
     if reply_id:
         session_store.update_pending_reply(tmux_name, reply_id)
     logger.info(f"Started Claude Code: tmux={tmux_name} cwd={cwd} prompt={prompt[:50]}")
@@ -210,15 +215,15 @@ def _resume_claude(session_id: str, old_session: Session, reply_text: str, messa
         )
         if result.returncode != 0:
             logger.error(f"tmux new-session for resume failed: {result.stderr.strip()}")
-            _reply(message_id, f"⚠️ 恢复失败: {result.stderr.strip()}")
+            _reply(message_id, t("feishu.resume_failed", error=result.stderr.strip()))
             return
     except Exception as e:
         logger.error(f"Resume Claude failed: {e}")
-        _reply(message_id, f"⚠️ 恢复失败: {e}")
+        _reply(message_id, t("feishu.resume_failed", error=e))
         return
 
     session_store.upsert(session_id, tty=tmux_name, cwd=cwd, root_msg_id=old_session.root_msg_id)
-    _reply(message_id, f"🔄 已恢复 Claude Code 会话\ntmux attach -t {tmux_name}")
+    _reply(message_id, t("feishu.resumed", tmux=tmux_name))
     logger.info(f"Resumed Claude: session={session_id[:8]} tmux={tmux_name} cwd={cwd}")
 
     if reply_text.strip():
@@ -236,6 +241,11 @@ def _resume_claude(session_id: str, old_session: Session, reply_text: str, messa
 def _on_message(data: P2ImMessageReceiveV1):
     sender_id = data.event.sender.sender_id
     logger.info("Message from open_id=%s", sender_id.open_id)
+
+    if not config.feishu_receive_id:
+        print(t("serve.received_open_id", open_id=sender_id.open_id))
+        return
+
     msg = data.event.message
     parent_id = msg.parent_id
     root_id = msg.root_id
@@ -244,7 +254,7 @@ def _on_message(data: P2ImMessageReceiveV1):
     # --- Parse message content early ---
     if msg.message_type != "text":
         if parent_id or root_id:
-            _reply(message_id, "⚠️ 只支持文本回复")
+            _reply(message_id, t("feishu.text_only"))
         return
 
     try:
@@ -272,7 +282,7 @@ def _on_message(data: P2ImMessageReceiveV1):
                 # tmux dead but session data exists → resume
                 _resume_claude(session_id, session, text, message_id)
             else:
-                _reply(message_id, "⚠️ 会话已过期，请发送新消息开始新会话")
+                _reply(message_id, t("feishu.session_expired"))
             return
         if not session:
             return
@@ -285,7 +295,7 @@ def _on_message(data: P2ImMessageReceiveV1):
         if _tmux:
             error = validate_target(_tmux)
             if error:
-                _reply(message_id, _STALE_SESSION_MESSAGE)
+                _reply(message_id, t("feishu.stale_session"))
                 return
             tty = _tmux
             project = basename(config.default_cwd) if config.default_cwd else "?"
@@ -295,7 +305,7 @@ def _on_message(data: P2ImMessageReceiveV1):
                 root_id or "-",
                 parent_id or "-",
             )
-            _reply(message_id, "⚠️ 找不到对应会话，请等待下一条通知后再回复")
+            _reply(message_id, t("feishu.session_not_found"))
             return
 
     try:
@@ -324,7 +334,8 @@ async def receive_hook(request: Request):
         return {"ok": False, "error": "missing tty (not in tmux?)"}
 
     effective_type = matcher or hook_type
-    label = _LABELS.get(effective_type, "")
+    labels = _labels()
+    label = labels.get(effective_type, "")
     if title and message:
         display_message = f"**{title}**\n{message}"
     elif label and message:
@@ -352,7 +363,7 @@ async def receive_hook(request: Request):
                 session_store.upsert(session_id, tty=tty, cwd=cwd, root_msg_id=root_id)
                 # Update the launch reply with session info
                 if reply_id:
-                    _edit_message(reply_id, f"🚀 Claude Code | {session_id[:8]}\ntmux attach -t {tty}")
+                    _edit_message(reply_id, t("feishu.started_with_session", session_id=session_id[:8], tmux=tty))
             _reply(root_id, text=display_message, reply_in_thread=True)
             return {"ok": True, "msg_id": root_id}
 
@@ -402,7 +413,7 @@ def _reap_idle_sessions():
                 try:
                     _reply(
                         session.root_msg_id,
-                        "⏰ 会话因长时间无活动已关闭，回复任意消息可恢复",
+                        t("feishu.idle_killed"),
                         reply_in_thread=True,
                     )
                 except Exception as e:
@@ -419,8 +430,8 @@ def _start_idle_reaper():
             except Exception as e:
                 logger.error(f"Idle reaper error: {e}")
 
-    t = threading.Thread(target=_loop, daemon=True)
-    t.start()
+    reaper = threading.Thread(target=_loop, daemon=True)
+    reaper.start()
     logger.info("Idle reaper started (timeout=%ds, interval=%ds)", _IDLE_TIMEOUT, _REAPER_INTERVAL)
 
 

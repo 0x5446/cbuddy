@@ -28,6 +28,13 @@ info()  { echo -e "${GREEN}[walkcode]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[walkcode]${NC} $*"; }
 error() { echo -e "${RED}[walkcode]${NC} $*" >&2; }
 
+# --- i18n ---
+is_zh() {
+  case "${LANG:-}${LANGUAGE:-}" in zh*) return 0 ;; esac
+  return 1
+}
+msg() { if is_zh; then echo "$2"; else echo "$1"; fi; }
+
 # --- Stop daemon if running ---
 stop_daemon() {
   local pid_file="$INSTALL_DIR/walkcode.pid"
@@ -35,11 +42,11 @@ stop_daemon() {
     local pid
     pid=$(cat "$pid_file" 2>/dev/null || true)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      info "Stopping WalkCode daemon (pid $pid)..."
+      info "$(msg "Stopping WalkCode daemon (pid $pid)..." "正在停止 WalkCode 守护进程 (pid $pid)...")"
       kill "$pid" 2>/dev/null || true
       sleep 1
       kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-      info "Daemon stopped"
+      info "$(msg "Daemon stopped" "守护进程已停止")"
     fi
     rm -f "$pid_file"
   fi
@@ -54,7 +61,7 @@ remove_shell_wrapper() {
   for rc in "${RC_CANDIDATES[@]}"; do
     [ -f "$rc" ] || continue
     if grep -q "$marker_start" "$rc" 2>/dev/null; then
-      info "Removing shell wrapper from $rc..."
+      info "$(msg "Removing shell wrapper from $rc..." "正在从 $rc 移除 shell wrapper...")"
       sed -i.walkcode-bak "/$marker_start/,/$marker_end/d" "$rc"
       rm -f "${rc}.walkcode-bak"
       found=1
@@ -62,7 +69,7 @@ remove_shell_wrapper() {
   done
 
   if [ "$found" -eq 0 ]; then
-    info "No shell wrapper found in any shell rc file, skipping"
+    info "$(msg "No shell wrapper found in any shell rc file, skipping" "未在任何 shell rc 文件中找到 wrapper，跳过")"
   fi
 }
 
@@ -73,17 +80,17 @@ remove_tmux_config() {
   local marker_end="# <<< walkcode tmux config <<<"
 
   if [ -f "$tmux_conf" ] && grep -q "$marker_start" "$tmux_conf" 2>/dev/null; then
-    info "Removing tmux config from $tmux_conf..."
+    info "$(msg "Removing tmux config from $tmux_conf..." "正在从 $tmux_conf 移除 tmux 配置...")"
     sed -i.walkcode-bak "/$marker_start/,/$marker_end/d" "$tmux_conf"
     rm -f "${tmux_conf}.walkcode-bak"
     # Remove file if empty (only whitespace left)
     if [ ! -s "$tmux_conf" ] || ! grep -q '[^[:space:]]' "$tmux_conf" 2>/dev/null; then
       rm -f "$tmux_conf"
-      info "Removed empty $tmux_conf"
+      info "$(msg "Removed empty $tmux_conf" "已删除空文件 $tmux_conf")"
     fi
     tmux source-file "$tmux_conf" 2>/dev/null || true
   else
-    info "No WalkCode tmux config found, skipping"
+    info "$(msg "No WalkCode tmux config found, skipping" "未找到 WalkCode tmux 配置，跳过")"
   fi
 }
 
@@ -91,19 +98,23 @@ remove_tmux_config() {
 remove_hooks() {
   local settings="$HOME/.claude/settings.json"
   if [ ! -f "$settings" ]; then
-    info "No Claude Code settings found, skipping hooks removal"
+    info "$(msg "No Claude Code settings found, skipping hooks removal" "未找到 Claude Code 配置文件，跳过 hooks 移除")"
     return
   fi
 
   if ! command -v python3 &>/dev/null; then
-    warn "python3 not found, cannot auto-remove hooks from $settings"
-    warn "Please manually remove the \"hooks\" section from $settings"
+    warn "$(msg \
+      "python3 not found, cannot auto-remove hooks from $settings" \
+      "未找到 python3，无法自动移除 $settings 中的 hooks")"
+    warn "$(msg \
+      "Please manually remove the \"hooks\" section from $settings" \
+      "请手动移除 $settings 中的 \"hooks\" 部分")"
     return
   fi
 
   # Only remove hooks that contain "walkcode" commands
   if grep -q "walkcode" "$settings" 2>/dev/null; then
-    info "Removing WalkCode hooks from $settings..."
+    info "$(msg "Removing WalkCode hooks from $settings..." "正在从 $settings 移除 WalkCode hooks...")"
     python3 -c "
 import json, sys
 path = '$settings'
@@ -137,18 +148,18 @@ else:
     print('No WalkCode hooks found')
 "
   else
-    info "No WalkCode hooks found in $settings, skipping"
+    info "$(msg "No WalkCode hooks found in $settings, skipping" "未在 $settings 中找到 WalkCode hooks，跳过")"
   fi
 }
 
 # --- Remove install directory ---
 remove_install_dir() {
   if [ -d "$INSTALL_DIR" ]; then
-    info "Removing install directory $INSTALL_DIR..."
+    info "$(msg "Removing install directory $INSTALL_DIR..." "正在移除安装目录 $INSTALL_DIR...")"
     rm -rf "$INSTALL_DIR"
-    info "Install directory removed"
+    info "$(msg "Install directory removed" "安装目录已移除")"
   else
-    info "Install directory $INSTALL_DIR not found, skipping"
+    info "$(msg "Install directory $INSTALL_DIR not found, skipping" "安装目录 $INSTALL_DIR 不存在，跳过")"
   fi
 }
 
@@ -158,20 +169,33 @@ main() {
   echo "  ╦ ╦╔═╗╦  ╦╔═╔═╗╔═╗╔╦╗╔═╗"
   echo "  ║║║╠═╣║  ╠╩╗║  ║ ║ ║║║╣ "
   echo "  ╚╩╝╩ ╩╩═╝╩ ╩╚═╝╚═╝═╩╝╚═╝"
-  echo "  Uninstaller"
+  if is_zh; then
+    echo "  卸载程序"
+  else
+    echo "  Uninstaller"
+  fi
   echo ""
 
-  echo "This will remove:"
-  echo "  1. WalkCode daemon (if running)"
-  echo "  2. Shell wrapper from all rc files (.zshrc, .bashrc, .profile, etc.)"
-  echo "  3. tmux config from ~/.tmux.conf"
-  echo "  4. Claude Code hooks from ~/.claude/settings.json"
-  echo "  5. Install directory ($INSTALL_DIR)"
+  if is_zh; then
+    echo "即将移除:"
+    echo "  1. WalkCode 守护进程（如正在运行）"
+    echo "  2. 所有 rc 文件中的 Shell wrapper (.zshrc, .bashrc, .profile 等)"
+    echo "  3. ~/.tmux.conf 中的 tmux 配置"
+    echo "  4. ~/.claude/settings.json 中的 Claude Code hooks"
+    echo "  5. 安装目录 ($INSTALL_DIR)"
+  else
+    echo "This will remove:"
+    echo "  1. WalkCode daemon (if running)"
+    echo "  2. Shell wrapper from all rc files (.zshrc, .bashrc, .profile, etc.)"
+    echo "  3. tmux config from ~/.tmux.conf"
+    echo "  4. Claude Code hooks from ~/.claude/settings.json"
+    echo "  5. Install directory ($INSTALL_DIR)"
+  fi
   echo ""
-  printf "Continue? [y/N] "
+  printf "$(msg "Continue? [y/N] " "继续？[y/N] ")"
   read -r answer </dev/tty
   if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
-    echo "Aborted."
+    echo "$(msg "Aborted." "已取消。")"
     exit 0
   fi
 
@@ -183,9 +207,9 @@ main() {
   remove_install_dir
 
   echo ""
-  info "WalkCode has been completely removed."
+  info "$(msg "WalkCode has been completely removed." "WalkCode 已完全卸载。")"
   echo ""
-  echo "  Restart your shell or run 'exec \$SHELL' to apply changes."
+  echo "  $(msg "Restart your shell or run 'exec \$SHELL' to apply changes." "重启终端或执行 'exec \$SHELL' 以应用更改。")"
   echo ""
 }
 

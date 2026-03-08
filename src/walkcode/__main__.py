@@ -10,6 +10,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
+from .i18n import t
 from .tty import detect_tmux_session
 
 _RUNTIME_DIR = Path.home() / ".walkcode"
@@ -30,9 +31,12 @@ def cmd_serve(_args):
         datefmt="%H:%M:%S",
     )
     start_ws_client(cfg)
-    print(f"WalkCode serving on http://localhost:{cfg.port}")
-    print(f"  Feishu {cfg.feishu_receive_id_type}: {cfg.feishu_receive_id}")
-    print(f"  Hook: POST http://localhost:{cfg.port}/hook")
+    print(t("serve.listening", port=cfg.port))
+    if cfg.feishu_receive_id:
+        print(t("serve.feishu_target", id_type=cfg.feishu_receive_id_type, receive_id=cfg.feishu_receive_id))
+    else:
+        print(t("serve.no_receive_id"))
+    print(t("serve.hook_url", port=cfg.port))
     uvicorn.run(app, host="127.0.0.1", port=cfg.port, log_level="warning")
 
 
@@ -65,7 +69,7 @@ def _wait_exit(pid: int, timeout: float = 5.0) -> bool:
 def cmd_start(args):
     pid = _read_pid()
     if pid:
-        print(f"WalkCode already running (pid {pid})")
+        print(t("start.already_running", pid=pid))
         sys.exit(1)
 
     log_path = Path(args.log) if args.log != "-" else None
@@ -90,26 +94,26 @@ def cmd_start(args):
     )
 
     _PID_FILE.write_text(str(proc.pid))
-    msg = f"WalkCode started (pid {proc.pid})"
     if log_path:
-        msg += f", log: {log_path}"
-    print(msg)
+        print(t("start.started_with_log", pid=proc.pid, log=log_path))
+    else:
+        print(t("start.started", pid=proc.pid))
 
 
 def cmd_stop(_args):
     pid = _read_pid()
     if not pid:
-        print("WalkCode is not running")
+        print(t("not_running"))
         sys.exit(1)
 
     os.kill(pid, signal.SIGTERM)
     if _wait_exit(pid):
         _PID_FILE.unlink(missing_ok=True)
-        print(f"WalkCode stopped (pid {pid})")
+        print(t("stop.stopped", pid=pid))
     else:
         os.kill(pid, signal.SIGKILL)
         _PID_FILE.unlink(missing_ok=True)
-        print(f"WalkCode killed (pid {pid})")
+        print(t("stop.killed", pid=pid))
 
 
 def cmd_restart(args):
@@ -119,7 +123,7 @@ def cmd_restart(args):
         if not _wait_exit(pid):
             os.kill(pid, signal.SIGKILL)
         _PID_FILE.unlink(missing_ok=True)
-        print(f"WalkCode stopped (pid {pid})")
+        print(t("stop.stopped", pid=pid))
 
     cmd_start(args)
 
@@ -127,9 +131,9 @@ def cmd_restart(args):
 def cmd_status(_args):
     pid = _read_pid()
     if pid:
-        print(f"WalkCode is running (pid {pid})")
+        print(t("status.running", pid=pid))
     else:
-        print("WalkCode is not running")
+        print(t("not_running"))
         sys.exit(1)
 
 
@@ -143,7 +147,7 @@ def cmd_hook(args):
 
     tmux_session = detect_tmux_session()
     if not tmux_session:
-        print("[walkcode] not in tmux, skipping hook", file=sys.stderr)
+        print(t("hook.not_in_tmux"), file=sys.stderr)
         return
 
     cwd = hook_data.get("cwd", "") or os.getcwd()
@@ -184,13 +188,13 @@ def cmd_hook(args):
         )
         urllib.request.urlopen(req, timeout=5)
     except Exception as e:
-        print(f"[walkcode] hook failed: {e}", file=sys.stderr)
+        print(t("hook.failed", error=e), file=sys.stderr)
 
 
 def cmd_install_hooks(_args):
     settings_path = Path.home() / ".claude" / "settings.json"
     if not settings_path.exists():
-        print(f"Error: {settings_path} not found")
+        print(t("install_hooks.not_found", path=settings_path))
         sys.exit(1)
 
     settings = json.loads(settings_path.read_text())
@@ -208,8 +212,8 @@ def cmd_install_hooks(_args):
     }
 
     settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
-    print(f"Hooks installed to {settings_path}")
-    print("Restart Claude Code sessions to activate.")
+    print(t("install_hooks.done", path=settings_path))
+    print(t("install_hooks.restart_hint"))
 
 
 _GITHUB_REPO = "0x5446/walkcode"
@@ -220,7 +224,7 @@ def _run(cmd, **kwargs):
     print(f"  → {cmd}")
     result = subprocess.run(cmd, shell=True, **kwargs)
     if result.returncode != 0:
-        print(f"  ✗ failed (exit {result.returncode})")
+        print(t("run.failed", code=result.returncode))
         sys.exit(1)
 
 
@@ -248,21 +252,21 @@ def _current_version() -> str:
 def cmd_upgrade(_args):
     """Upgrade WalkCode to the latest release via uv tool install."""
     current = _current_version()
-    print(f"Current version: {current}")
+    print(t("upgrade.current", version=current))
 
     tag = _get_latest_tag()
     if tag:
-        print(f"Latest release: {tag}")
+        print(t("upgrade.latest", tag=tag))
         source = f"git+{_GITHUB_URL}@{tag}"
     else:
-        print("No releases found, installing from main branch")
+        print(t("upgrade.no_release"))
         source = f"git+{_GITHUB_URL}"
 
     _run(f"uv tool install {source} --force")
 
     pid = _read_pid()
     if pid:
-        print("Restarting daemon...")
+        print(t("upgrade.restarting"))
         os.kill(pid, signal.SIGTERM)
         if _wait_exit(pid):
             _PID_FILE.unlink(missing_ok=True)
@@ -272,9 +276,9 @@ def cmd_upgrade(_args):
         # Start with default log
         cmd_start(argparse.Namespace(log=str(_DEFAULT_LOG)))
     else:
-        print("Daemon not running, skipping restart.")
+        print(t("upgrade.not_running"))
 
-    print("Upgrade complete.")
+    print(t("upgrade.complete"))
 
 
 def cmd_uninstall(_args):
@@ -282,19 +286,19 @@ def cmd_uninstall(_args):
     # 1. Stop daemon if running
     pid = _read_pid()
     if pid:
-        print(f"Stopping daemon (pid {pid})...")
+        print(t("uninstall.stopping", pid=pid))
         os.kill(pid, signal.SIGTERM)
         if _wait_exit(pid):
             _PID_FILE.unlink(missing_ok=True)
         else:
             os.kill(pid, signal.SIGKILL)
             _PID_FILE.unlink(missing_ok=True)
-        print("  Daemon stopped.")
+        print(t("uninstall.stopped"))
 
     # 2. Remove uv tool
-    print("Removing walkcode CLI...")
+    print(t("uninstall.removing_cli"))
     subprocess.run(["uv", "tool", "uninstall", "walkcode"], capture_output=True)
-    print("  Done.")
+    print(t("uninstall.done"))
 
     # 3. Remove shell wrapper from rc files
     for rc in [Path.home() / ".zshrc", Path.home() / ".bashrc", Path.home() / ".profile"]:
@@ -321,7 +325,7 @@ def cmd_uninstall(_args):
                 if not skip:
                     new_lines.append(line)
             rc.write_text("\n".join(new_lines))
-            print(f"  Removed shell wrapper from {rc}")
+            print(t("uninstall.removed_wrapper", path=rc))
 
     # 4. Remove tmux config
     tmux_conf = Path.home() / ".tmux.conf"
@@ -345,24 +349,24 @@ def cmd_uninstall(_args):
                 if not skip:
                     new_lines.append(line)
             tmux_conf.write_text("\n".join(new_lines))
-            print(f"  Removed tmux config from {tmux_conf}")
+            print(t("uninstall.removed_tmux", path=tmux_conf))
 
     # 5. Remove config directory
     if _RUNTIME_DIR.exists():
-        print(f"\nConfig directory: {_RUNTIME_DIR}")
-        print("  Contains .env, state.json, logs, etc.")
+        print(t("uninstall.config_dir", path=_RUNTIME_DIR))
+        print(t("uninstall.config_contents"))
         try:
-            answer = input("  Remove it? [y/N] ").strip().lower()
+            answer = input(t("uninstall.remove_prompt")).strip().lower()
         except (EOFError, KeyboardInterrupt):
             answer = ""
         if answer == "y":
             import shutil
             shutil.rmtree(_RUNTIME_DIR)
-            print(f"  Removed {_RUNTIME_DIR}")
+            print(t("uninstall.removed_dir", path=_RUNTIME_DIR))
         else:
-            print(f"  Kept {_RUNTIME_DIR}")
+            print(t("uninstall.kept_dir", path=_RUNTIME_DIR))
 
-    print("\nWalkCode uninstalled.")
+    print(t("uninstall.complete"))
 
 
 def cmd_test_inject(args):
@@ -370,12 +374,12 @@ def cmd_test_inject(args):
 
     error = validate_target(args.session)
     if error:
-        print(f"Error: {error}")
+        print(t("test_inject.error", error=error))
         sys.exit(1)
 
     inject(args.session, args.text, enter=not args.no_enter)
     suffix = " (no enter)" if args.no_enter else " + Enter"
-    print(f"Injected '{args.text}'{suffix} -> tmux:{args.session}")
+    print(t("test_inject.done", text=args.text, suffix=suffix, session=args.session))
 
 
 def main():
