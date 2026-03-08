@@ -212,39 +212,157 @@ def cmd_install_hooks(_args):
     print("Restart Claude Code sessions to activate.")
 
 
-def cmd_upgrade(_args):
-    """Pull latest code, reinstall CLI, restart daemon."""
-    install_dir = _RUNTIME_DIR
-    if not (install_dir / ".git").exists():
-        # Try common install location
-        install_dir = Path.home() / ".walkcode"
-    if not (install_dir / ".git").exists():
-        print(f"Error: git repo not found in {install_dir}")
-        print("If WalkCode is installed elsewhere, cd into that directory and run:")
-        print("  git pull && uv sync && uv tool install -e . --force && walkcode restart")
+_GITHUB_REPO = "0x5446/walkcode"
+_GITHUB_URL = f"https://github.com/{_GITHUB_REPO}.git"
+
+
+def _run(cmd, **kwargs):
+    print(f"  → {cmd}")
+    result = subprocess.run(cmd, shell=True, **kwargs)
+    if result.returncode != 0:
+        print(f"  ✗ failed (exit {result.returncode})")
         sys.exit(1)
 
-    def run(cmd, **kwargs):
-        print(f"  → {cmd}")
-        result = subprocess.run(cmd, shell=True, cwd=str(install_dir), **kwargs)
-        if result.returncode != 0:
-            print(f"  ✗ failed (exit {result.returncode})")
-            sys.exit(1)
 
-    print(f"Upgrading WalkCode in {install_dir}...")
-    run("git reset --hard HEAD")
-    run("git pull --ff-only")
-    run("uv sync")
-    run("uv tool install -e . --force")
+def _get_latest_tag() -> str | None:
+    """Fetch the latest release tag from GitHub API."""
+    url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            return data.get("tag_name")
+    except Exception:
+        return None
+
+
+def _current_version() -> str:
+    """Read version from installed package metadata."""
+    try:
+        from importlib.metadata import version
+        return version("walkcode")
+    except Exception:
+        return "unknown"
+
+
+def cmd_upgrade(_args):
+    """Upgrade WalkCode to the latest release via uv tool install."""
+    current = _current_version()
+    print(f"Current version: {current}")
+
+    tag = _get_latest_tag()
+    if tag:
+        print(f"Latest release: {tag}")
+        source = f"git+{_GITHUB_URL}@{tag}"
+    else:
+        print("No releases found, installing from main branch")
+        source = f"git+{_GITHUB_URL}"
+
+    _run(f"uv tool install {source} --force")
 
     pid = _read_pid()
     if pid:
         print("Restarting daemon...")
-        run("walkcode restart")
+        os.kill(pid, signal.SIGTERM)
+        if _wait_exit(pid):
+            _PID_FILE.unlink(missing_ok=True)
+        else:
+            os.kill(pid, signal.SIGKILL)
+            _PID_FILE.unlink(missing_ok=True)
+        # Start with default log
+        cmd_start(argparse.Namespace(log=str(_DEFAULT_LOG)))
     else:
         print("Daemon not running, skipping restart.")
 
     print("Upgrade complete.")
+
+
+def cmd_uninstall(_args):
+    """Uninstall WalkCode: stop daemon, remove CLI, clean up config."""
+    # 1. Stop daemon if running
+    pid = _read_pid()
+    if pid:
+        print(f"Stopping daemon (pid {pid})...")
+        os.kill(pid, signal.SIGTERM)
+        if _wait_exit(pid):
+            _PID_FILE.unlink(missing_ok=True)
+        else:
+            os.kill(pid, signal.SIGKILL)
+            _PID_FILE.unlink(missing_ok=True)
+        print("  Daemon stopped.")
+
+    # 2. Remove uv tool
+    print("Removing walkcode CLI...")
+    subprocess.run(["uv", "tool", "uninstall", "walkcode"], capture_output=True)
+    print("  Done.")
+
+    # 3. Remove shell wrapper from rc files
+    for rc in [Path.home() / ".zshrc", Path.home() / ".bashrc", Path.home() / ".profile"]:
+        if not rc.exists():
+            continue
+        content = rc.read_text()
+        start = "# >>> walkcode claude wrapper >>>"
+        end = "# <<< walkcode claude wrapper <<<"
+        if start in content:
+            # Remove the block including surrounding blank lines
+            lines = content.split("\n")
+            new_lines = []
+            skip = False
+            for line in lines:
+                if start in line:
+                    # Also remove the blank line before the block
+                    if new_lines and new_lines[-1].strip() == "":
+                        new_lines.pop()
+                    skip = True
+                    continue
+                if end in line:
+                    skip = False
+                    continue
+                if not skip:
+                    new_lines.append(line)
+            rc.write_text("\n".join(new_lines))
+            print(f"  Removed shell wrapper from {rc}")
+
+    # 4. Remove tmux config
+    tmux_conf = Path.home() / ".tmux.conf"
+    if tmux_conf.exists():
+        content = tmux_conf.read_text()
+        start = "# >>> walkcode tmux config >>>"
+        end = "# <<< walkcode tmux config <<<"
+        if start in content:
+            lines = content.split("\n")
+            new_lines = []
+            skip = False
+            for line in lines:
+                if start in line:
+                    if new_lines and new_lines[-1].strip() == "":
+                        new_lines.pop()
+                    skip = True
+                    continue
+                if end in line:
+                    skip = False
+                    continue
+                if not skip:
+                    new_lines.append(line)
+            tmux_conf.write_text("\n".join(new_lines))
+            print(f"  Removed tmux config from {tmux_conf}")
+
+    # 5. Remove config directory
+    if _RUNTIME_DIR.exists():
+        print(f"\nConfig directory: {_RUNTIME_DIR}")
+        print("  Contains .env, state.json, logs, etc.")
+        try:
+            answer = input("  Remove it? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer == "y":
+            import shutil
+            shutil.rmtree(_RUNTIME_DIR)
+            print(f"  Removed {_RUNTIME_DIR}")
+        else:
+            print(f"  Kept {_RUNTIME_DIR}")
+
+    print("\nWalkCode uninstalled.")
 
 
 def cmd_test_inject(args):
@@ -280,7 +398,8 @@ def main():
     hp.add_argument("hook_type", choices=["stop", "notification"], help="Hook event type")
 
     sub.add_parser("install-hooks", help="Install Claude Code hooks")
-    sub.add_parser("upgrade", help="Pull latest code, reinstall CLI, restart daemon")
+    sub.add_parser("upgrade", help="Upgrade to latest release")
+    sub.add_parser("uninstall", help="Uninstall WalkCode completely")
 
     p = sub.add_parser("test-inject", help="Test tmux injection")
     p.add_argument("session", help="tmux session name")
@@ -297,6 +416,7 @@ def main():
         "hook": cmd_hook,
         "install-hooks": cmd_install_hooks,
         "upgrade": cmd_upgrade,
+        "uninstall": cmd_uninstall,
         "test-inject": cmd_test_inject,
     }
     fn = cmds.get(args.command)

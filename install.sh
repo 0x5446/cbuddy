@@ -4,8 +4,9 @@ set -euo pipefail
 # WalkCode one-click installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/0x5446/walkcode/main/install.sh | bash
 
-REPO="https://github.com/0x5446/walkcode.git"
-INSTALL_DIR="${WALKCODE_DIR:-$HOME/.walkcode}"
+REPO="0x5446/walkcode"
+GITHUB_URL="https://github.com/${REPO}.git"
+CONFIG_DIR="${WALKCODE_DIR:-$HOME/.walkcode}"
 SHELL_RC=""
 
 # --- Colors ---
@@ -33,10 +34,6 @@ detect_shell_rc() {
 check_prereqs() {
   local missing=()
 
-  if ! command -v git &>/dev/null; then
-    missing+=("git")
-  fi
-
   if ! command -v tmux &>/dev/null; then
     if command -v brew &>/dev/null; then
       info "Installing tmux via Homebrew..."
@@ -58,36 +55,52 @@ check_prereqs() {
   fi
 }
 
-# --- Clone or update repo ---
-clone_or_update() {
-  if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Updating existing installation..."
-    git -C "$INSTALL_DIR" reset --hard HEAD
-    git -C "$INSTALL_DIR" pull --ff-only
+# --- Get latest release tag ---
+get_latest_tag() {
+  local tag
+  tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') || true
+  echo "$tag"
+}
+
+# --- Install Python package via uv tool ---
+install_package() {
+  local tag
+  tag=$(get_latest_tag)
+
+  if [ -n "$tag" ]; then
+    info "Installing WalkCode ${tag}..."
+    uv tool install "git+${GITHUB_URL}@${tag}" --force 2>/dev/null \
+      || uv tool install "git+${GITHUB_URL}@${tag}"
   else
-    info "Cloning WalkCode..."
-    git clone "$REPO" "$INSTALL_DIR"
+    info "No releases found, installing from main branch..."
+    uv tool install "git+${GITHUB_URL}" --force 2>/dev/null \
+      || uv tool install "git+${GITHUB_URL}"
   fi
 }
 
-# --- Install Python package ---
-install_package() {
-  info "Installing dependencies..."
-  cd "$INSTALL_DIR"
-  uv sync
+# --- Setup config directory and .env ---
+setup_config() {
+  mkdir -p "$CONFIG_DIR/workspace"
 
-  info "Installing walkcode CLI..."
-  uv tool install -e "$INSTALL_DIR" --force 2>/dev/null || uv tool install -e "$INSTALL_DIR"
+  if [ ! -f "$CONFIG_DIR/.env" ]; then
+    cat > "$CONFIG_DIR/.env" << 'ENVFILE'
+# WalkCode Configuration
+# See: https://github.com/0x5446/walkcode
 
-  # Ensure remote-start workspace directory exists
-  mkdir -p "$HOME/.walkcode/workspace"
-}
+# Feishu App credentials (required)
+FEISHU_APP_ID=
+FEISHU_APP_SECRET=
 
-# --- Setup .env ---
-setup_env() {
-  if [ ! -f "$INSTALL_DIR/.env" ]; then
-    cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
-    warn ".env created from template — edit $INSTALL_DIR/.env with your Feishu credentials"
+# Who receives notifications (required)
+# Use open_id for direct messages, or chat_id for group chats
+FEISHU_RECEIVE_ID=
+FEISHU_RECEIVE_ID_TYPE=open_id
+
+# Server port (optional, default 3001)
+# PORT=3001
+ENVFILE
+    warn ".env created — edit $CONFIG_DIR/.env with your Feishu credentials"
   else
     info ".env already exists, skipping"
   fi
@@ -151,13 +164,12 @@ install_hooks() {
   local settings="$HOME/.claude/settings.json"
   if [ ! -f "$settings" ]; then
     warn "$settings not found — skipping hook installation"
-    warn "Run 'uv run walkcode install-hooks' after Claude Code is set up"
+    warn "Run 'walkcode install-hooks' after Claude Code is set up"
     return
   fi
 
   info "Installing Claude Code hooks..."
-  cd "$INSTALL_DIR"
-  uv run walkcode install-hooks
+  walkcode install-hooks
 }
 
 # --- Main ---
@@ -170,9 +182,8 @@ main() {
   echo ""
 
   check_prereqs
-  clone_or_update
   install_package
-  setup_env
+  setup_config
   install_wrapper
   configure_tmux
   install_hooks
@@ -187,9 +198,9 @@ main() {
   info "Installation complete!"
   echo ""
   echo "  Next steps:"
-  echo "  1. Edit $INSTALL_DIR/.env with your Feishu credentials"
+  echo "  1. Edit $CONFIG_DIR/.env with your Feishu credentials"
   echo "  2. source $SHELL_RC"
-  echo "  3. cd $INSTALL_DIR && uv run walkcode serve"
+  echo "  3. walkcode start"
   echo "  4. Send a message to your Feishu bot to get your open_id"
   echo "  5. Add open_id to .env, restart, and go for a walk"
   echo ""
