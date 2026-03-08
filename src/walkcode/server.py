@@ -521,10 +521,19 @@ async def health():
 # --- Idle reaper ---
 
 def _reap_idle_sessions():
-    """Check all tracked sessions and kill idle tmux sessions."""
+    """Check all tracked sessions and kill idle tmux sessions.
+
+    Only Feishu-initiated sessions (tmux name starts with "walkcode-") are
+    reaped.  Locally-initiated sessions (e.g. "claude-project-12345") are
+    left alone — the user opened them on their own machine and may simply
+    be away; killing them silently would be a bad experience.
+    """
     now = time.time()
     for session_id, session in session_store.items():
         if not session.tty:
+            continue
+        # Skip locally-initiated sessions — only reap Feishu-initiated ones
+        if not session.tty.startswith("walkcode-"):
             continue
         activity = get_session_activity(session.tty)
         if activity is None:
